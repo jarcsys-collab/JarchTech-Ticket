@@ -1,0 +1,13 @@
+{
+  "name": "jarctech-ticket",
+  "version": "0.2.0",
+  "private": true,
+  "description": "JarcTech Ticket - local ticketing and project Gantt prototype",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server.cjs",
+    "dev": "node server.cjs",
+    "check": "node --check server.cjs && node --check public/app.js && node --check public/projects.js && node --check public/timeline-core.js",
+    "test": "node --test tests/*.test.cjs"
+  }
+}
