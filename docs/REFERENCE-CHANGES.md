@@ -37,3 +37,18 @@ Source: `reference/annotated-review.pdf`, supplied by the owner on 21 October 20
 - Browser walkthrough: assigned an isolated demo ticket; created a named project in two steps; rejected reversed dates; saved a valid task; rendered Gantt; completed a task; reloaded; confirmed saved progress and requestor read-only project access.
 
 The walkthrough used an isolated demo origin and did not change the owner's main localhost working records.
+
+## Phase 1 - ticket-core extraction and stored-data recovery
+
+Owner-approved change on `feature/phase1-ticket-core`. Statuses, demo identities, role visibility, progress, and localStorage access moved from `app.js` into `public/ticket-core.js`. Storage key, data format, UI, and workflow are unchanged.
+
+Intended behavior change: unreadable or structurally invalid stored data previously fell back to sample data, which the next save wrote over the original records. Now:
+
+- The original `jarc-helpdesk-v1` value is never modified on load.
+- The exact raw value is copied to a unique `jarc-helpdesk-v1-backup-<timestamp>` key; an identical earlier backup is reused. A failed or mismatched backup is reported and the original is still kept.
+- Saving is paused and a recovery screen offers download, retry, and an explicit, confirmed reset to sample data. Reset removes only the main record; backups remain.
+- Storage read failures enter recovery; write failures show a warning and keep the last saved value.
+
+"Structurally valid" means `tickets`, `changes`, and `notices` arrays, with every ticket having a string `id`, `tasks`, and `history`, and every change a string `id` and `history`. Data created by the app always meets this.
+
+Verified with `tests/ticket-core.test.cjs` (preservation, role filtering, progress, invalid data, failed backup, blocked saves, write failure, reset) and `npm run walkthrough`, an optional isolated headless-browser check of the full workflow plus recovery cases (see README).

@@ -50,21 +50,39 @@ npm.cmd run check
 npm.cmd test
 ```
 
+### Optional browser walkthrough
+
+`npm.cmd run walkthrough` drives a headless Chrome or Edge through the full workflow (submission, assignment, planning meeting, two-step project, invalid dates, Gantt save/reload, requestor read-only access, acceptance, release, closure) and the stored-data recovery cases. It is not part of `npm test` or GitHub Actions because it needs a local browser.
+
+- Requires Node 22+ and Chrome or Edge in a standard install location, or `BROWSER_PATH` set to the browser executable.
+- Starts its own server on port 4190 (`WALKTHROUGH_PORT`) and uses debugging port 9333 (`WALKTHROUGH_DEBUG_PORT`). It stops if either port is already in use.
+- Uses a temporary browser profile that is deleted afterwards, with its own test data. It never opens your normal browser profile or other ports, so working records are untouched.
+- Set `WALKTHROUGH_SCREENSHOTS` to a folder to save screenshots (for example `tmp/`, which Git ignores).
+
+```powershell
+npm.cmd run walkthrough
+$env:WALKTHROUGH_SCREENSHOTS = 'tmp'; npm.cmd run walkthrough
+```
+
 ## Source map
 
 | File | Responsibility |
 | --- | --- |
-| `public/app.js` | Seed data, local state, ticket lifecycle, comments, notifications, linked change lifecycle |
+| `public/ticket-core.js` | Statuses, demo identities, role visibility, progress, safe localStorage load/save, and stored-data recovery |
+| `public/app.js` | Seed data, ticket lifecycle, recovery screen, comments, notifications, linked change lifecycle |
 | `public/projects.js` | Dated project creation, task forms, Gantt views, project detail edits |
 | `public/timeline-core.js` | Validated UTC calendar dates and inclusive timeline calculations |
 | `public/style.css`, `public/projects.css` | Base JARC styling and project/Gantt layouts |
 | `server.cjs` | Local static file server; it has no ticket API or database |
+| `scripts/browser-walkthrough.mjs` | Optional headless-browser workflow and recovery check; not run in CI |
 | `docs/REFERENCE-CHANGES.md` | Review annotations, implemented changes, interpretation, and open decisions |
 | `docs/reference/annotated-review.pdf` | User-supplied annotated visual reference, retained unchanged |
 
 ## Prototype boundaries
 
 All records are in this browser's localStorage (`jarc-helpdesk-v1`), not on the server. Separate browsers, devices, hostnames, and ports have separate data. The ZIP includes code and sample data, not your browser's working records. Existing local records are preserved; tasks without dates are labeled unscheduled. Fresh demo schedules are illustrative, not agreed business commitments.
+
+If the stored records cannot be read or are missing required fields, the app opens a recovery screen instead of loading sample data. The original value is left untouched, an exact copy is saved under a `jarc-helpdesk-v1-backup-<timestamp>` key when possible, and automatic saving is paused. You can download the stored value, try again, or explicitly reset to sample data; backups are kept after a reset. If a save fails (for example, storage is full), the app warns that recent changes exist only in the open tab.
 
 Real authentication, server-enforced permissions, a shared database, file uploads, and email/calendar delivery are future phases. Current UI role checks do not secure data. Do not use this as a production multi-user system until those phases are built.
 
