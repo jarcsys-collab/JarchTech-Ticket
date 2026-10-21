@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.cjs",
     "dev": "node server.cjs",
-    "check": "node --check server.cjs && node --check public/app.js && node --check public/projects.js && node --check public/timeline-core.js",
-    "test": "node --test tests/*.test.cjs"
+    "check": "node --check server.cjs && node --check public/app.js && node --check public/projects.js && node --check public/timeline-core.js && node --check public/ticket-core.js && node --check scripts/browser-walkthrough.mjs",
+    "test": "node --test tests/*.test.cjs",
+    "walkthrough": "node scripts/browser-walkthrough.mjs"
   }
 }
