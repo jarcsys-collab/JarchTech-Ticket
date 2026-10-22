@@ -2,6 +2,7 @@
 // reachability with a ping. The driver connects lazily on the first command.
 const { MongoClient } = require('mongodb');
 const { redact, secretsFromUri } = require('./redact.cjs');
+const { missingSchema } = require('./schema.cjs');
 
 const SERVER_SELECTION_TIMEOUT_MS = 5000;
 
@@ -10,6 +11,7 @@ const notConfigured = Object.freeze({
   configured: false,
   name: null,
   async ping() { return { ok: false, reason: 'not-configured' }; },
+  async missingSchema() { return ['database']; },
   async close() {},
   redact: text => redact(text)
 });
@@ -38,6 +40,8 @@ function createDatabase(config) {
         return { ok: false, reason: 'unreachable', error: redact(`${err.name}: ${err.message}`, secrets) };
       }
     },
+    // Read-only check that the sign-in collections and indexes exist (created by npm run db:setup).
+    missingSchema: () => missingSchema(client.db(config.name)),
     async close() {
       if (closed) return;
       closed = true;

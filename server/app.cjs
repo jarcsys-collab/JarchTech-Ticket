@@ -1,8 +1,9 @@
-// HTTP handler: the browser prototype's static files plus health and readiness checks.
-// The UI still stores records in the browser; no ticket API exists yet.
+// HTTP handler: the browser prototype's static files, health and readiness checks, and (with AUTH_MODE=entra)
+// Microsoft sign-in in front of the app. Ticket records are still stored in the browser; no ticket API exists yet.
 const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { injectSession } = require('./auth/index.cjs');
 
 const ROOT = path.join(__dirname, '..', 'public');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml' };
@@ -13,43 +14,69 @@ function sendJson(req, res, status, body) {
   res.end(req.method === 'HEAD' ? undefined : JSON.stringify(body));
 }
 
-// /healthz: the process is up and answering. /readyz: it can serve traffic, which requires the database.
+// /healthz: the process is up and answering. /readyz: it can serve traffic, which requires the database and,
+// with sign-in enabled, the collections created by `npm run db:setup` (checked read-only).
 // Responses never include error details; those go to the server log, redacted.
-function createHealth({ database, isShuttingDown, log }) {
-  let lastReady = null;
+function createHealth({ database, requireSchema, isShuttingDown, log }) {
+  let lastState = null;
+  const note = (state, message) => {
+    if (state === lastState) return;
+    lastState = state;
+    if (state === 'ready') log.log(message); else log.error(message);
+  };
   return async function health(req, res, pathname) {
     if (pathname === '/healthz') return sendJson(req, res, 200, { status: 'ok' });
     if (isShuttingDown()) return sendJson(req, res, 503, { status: 'not-ready', database: 'stopping' });
     if (!database || !database.configured) return sendJson(req, res, 503, { status: 'not-ready', database: 'not-configured' });
     const result = await database.ping();
-    if (result.ok !== lastReady) {
-      lastReady = result.ok;
-      if (result.ok) log.log('Readiness: database reachable.');
-      else log.error(`Readiness: database ${result.reason}.${result.error ? ' ' + result.error : ''}`);
+    if (!result.ok) {
+      note(result.reason, `Readiness: database ${result.reason}.${result.error ? ' ' + result.error : ''}`);
+      return sendJson(req, res, 503, { status: 'not-ready', database: result.reason });
     }
-    return result.ok
-      ? sendJson(req, res, 200, { status: 'ready', database: 'connected' })
-      : sendJson(req, res, 503, { status: 'not-ready', database: result.reason });
+    if (requireSchema) {
+      const missing = await database.missingSchema();
+      if (missing.length) {
+        note('schema-missing', `Readiness: sign-in collections or indexes are missing (${missing.join(', ')}). Run npm run db:setup.`);
+        return sendJson(req, res, 503, { status: 'not-ready', database: 'schema-missing' });
+      }
+    }
+    note('ready', 'Readiness: database reachable.');
+    return sendJson(req, res, 200, { status: 'ready', database: 'connected' });
   };
 }
 
-function createServer({ database = null, isShuttingDown = () => false, log = console } = {}) {
-  const health = createHealth({ database, isShuttingDown, log });
+async function serveStatic(req, res, pathname, user) {
+  let name;
+  try { name = decodeURIComponent(pathname); }
+  catch { res.writeHead(400); return res.end('Bad request'); }
+  if (name === '/') name = '/index.html';
+  const file = path.resolve(ROOT, '.' + name);
+  if (!file.startsWith(ROOT + path.sep)) { res.writeHead(403); return res.end('Forbidden'); }
+  let bytes;
+  try { bytes = await fs.readFile(file); }
+  catch { res.writeHead(404); return res.end('Not found'); }
+  const headers = { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
+  if (user && name === '/index.html') { bytes = injectSession(bytes.toString('utf8'), user); headers['X-Frame-Options'] = 'DENY'; }
+  res.writeHead(200, headers);
+  res.end(req.method === 'HEAD' ? undefined : bytes);
+}
+
+// `auth` is null in demo mode, which serves the prototype exactly as before.
+function createServer({ database = null, auth = null, isShuttingDown = () => false, log = console } = {}) {
+  const health = createHealth({ database, requireSchema: Boolean(auth), isShuttingDown, log });
   return http.createServer(async (req, res) => {
-    if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405, { Allow: 'GET, HEAD' }); return res.end(); }
     const pathname = (req.url || '/').split('?')[0];
+    if (auth && await auth.handle(req, res, pathname)) return;
+    if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405, { Allow: 'GET, HEAD' }); return res.end(); }
     if (pathname === '/healthz' || pathname === '/readyz') return health(req, res, pathname);
-    let name;
-    try { name = decodeURIComponent(pathname); }
-    catch { res.writeHead(400); return res.end('Bad request'); }
-    if (name === '/') name = '/index.html';
-    const file = path.resolve(ROOT, '.' + name);
-    if (!file.startsWith(ROOT + path.sep)) { res.writeHead(403); return res.end('Forbidden'); }
+    if (!auth) return serveStatic(req, res, pathname, null);
     try {
-      const bytes = await fs.readFile(file);
-      res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
-      res.end(req.method === 'HEAD' ? undefined : bytes);
-    } catch { res.writeHead(404); res.end('Not found'); }
+      const access = await auth.gate(req, res, pathname);
+      if (access) return serveStatic(req, res, pathname, access.user || null);
+    } catch (err) {
+      log.error(`Request failed: ${database.redact(`${err.name}: ${err.message}`)}`);
+      if (!res.headersSent) { res.writeHead(503, { 'Cache-Control': 'no-store' }); res.end('Service unavailable'); }
+    }
   });
 }
 

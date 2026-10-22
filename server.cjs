@@ -4,14 +4,17 @@ const path = require('node:path');
 const { createServer } = require('./server/app.cjs');
 const { ConfigError, loadConfig, loadEnvFile } = require('./server/config.cjs');
 const { createDatabase } = require('./server/database.cjs');
+const { createAuth } = require('./server/auth/index.cjs');
 
 const SHUTDOWN_GRACE_MS = 8000;
 
 // Starts the server for an already validated config. Resolves once listening.
-async function start(config, { log = console } = {}) {
+// `oidc` and `now` are for tests only (a local mock sign-in provider and a controllable clock).
+async function start(config, { log = console, oidc, now } = {}) {
   const database = createDatabase(config.database);
+  const auth = config.auth.mode === 'entra' ? createAuth(config.auth, { database, log, oidc, now }) : null;
   let shuttingDown = false;
-  const server = createServer({ database, isShuttingDown: () => shuttingDown, log });
+  const server = createServer({ database, auth, isShuttingDown: () => shuttingDown, log });
 
   try {
     await new Promise((resolve, reject) => {
@@ -24,6 +27,9 @@ async function start(config, { log = console } = {}) {
   }
   const port = server.address().port;
   log.log(`JarcTech Ticket: http://localhost:${port}`);
+  log.log(auth
+    ? 'Sign-in: Microsoft Entra ID required. Access is by admin invitation only.'
+    : 'Sign-in: none. Browser-only demo mode for local use; records stay in this browser.');
   if (database.configured) {
     log.log(`Database: ${database.name} configured. Checking connection...`);
     database.ping(5000).then(r => r.ok
