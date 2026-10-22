@@ -9,7 +9,7 @@ Status: decided by the owner on 2026-10-22. Details marked "pending" still need 
 | Source control | GitHub (`jarcsys-collab/JarchTech-Ticket`) | Feature branches and pull requests into `main`. GitHub Actions runs checks. |
 | Application and backend hosting | Railway | Use the owner's **existing paid Railway account and project**. Do not create new accounts or buy additional plans. |
 | Shared database | MongoDB Atlas | Use the owner's **existing paid Atlas account**. Do not create new accounts or buy additional plans. Development uses the separate database `jarctech_ticket_dev`, with a user restricted to that database. |
-| Sign-in (planned) | Microsoft Entra ID | The company's existing Entra sign-in, using OpenID Connect. Planned for the authentication step; not implemented yet. |
+| Sign-in | Microsoft Entra ID | The company's existing Entra sign-in, using OpenID Connect (`openid-client`). Implemented on `feature/entra-auth` and tested with mocks; no app registration or real credentials configured yet. See `docs/AUTH-DESIGN.md`. |
 
 Do not substitute another database or hosting platform without a new owner decision recorded here.
 
@@ -39,6 +39,7 @@ Do not substitute another database or hosting platform without a new owner decis
 
 - The connection-ready server foundation: settings validation, health and readiness endpoints, Railway `PORT`/`HOST` binding, clean shutdown, and the MongoDB driver (ping only). See README, "Backend foundation". The UI still stores records in the browser.
 - 2026-10-22: Atlas connectivity was verified locally against `jarctech_ticket_dev` with a dedicated user restricted to that database. `/readyz` reported `ready` / `connected`. The check sent only `ping`; no collections or records were created. The credentials are only in the owner's Git-ignored local `.env`.
-- Not done yet: Microsoft Entra sign-in, server-enforced permissions, the ticket/project/change API, database collections and indexes, the browser-data import, and Railway deployment.
+- Microsoft Entra sign-in (on `feature/entra-auth`): invite-only admission, server-side sessions and roles, the Admin Users screen, and the `db:setup` and `admin:bootstrap` commands. It is tested with a mock Entra provider and a temporary database, and not yet connected to a real app registration.
+- Not done yet: server-enforced ticket permissions and the ticket/project/change API, the browser-data import, and Railway deployment.
 
 See `docs/BACKEND-PLAN.md` for the implementation plan.

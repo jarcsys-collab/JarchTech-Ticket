@@ -163,3 +163,13 @@ test('SIGTERM shuts the process down cleanly', { skip: process.platform === 'win
   assert.equal(code, 0, run.output());
   assert.match(run.output(), /SIGTERM received\. Stopping\.\.\.[\s\S]*Shutdown complete\./);
 });
+
+test('process refuses to start in production without valid sign-in settings, and never falls back to demo mode', async () => {
+  const noAuth = runServer({ NODE_ENV: 'production', PORT: '0', MONGODB_URI: testUri, MONGODB_DB_NAME: dbName() });
+  assert.equal((await noAuth.exited).code, 1);
+  assert.match(noAuth.output(), /AUTH_MODE=entra is required when deployed/);
+  const partial = runServer({ NODE_ENV: 'production', PORT: '0', MONGODB_URI: testUri, MONGODB_DB_NAME: dbName(), AUTH_MODE: 'entra', ENTRA_TENANT_ID: '11111111-2222-4333-8444-555555555555' });
+  assert.equal((await partial.exited).code, 1);
+  assert.match(partial.output(), /ENTRA_CLIENT_ID is required/); assert.match(partial.output(), /SESSION_SECRET is required/);
+  for (const run of [noAuth, partial]) assert.ok(!/http:\/\/localhost:|Sign-in: none/.test(run.output()), 'must not start listening or start in demo mode: ' + run.output());
+});

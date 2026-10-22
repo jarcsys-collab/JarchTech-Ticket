@@ -73,7 +73,7 @@ const running = child => child.pid && child.exitCode === null && child.signalCod
 // or inherits database or host settings, so it cannot connect to a real database.
 function serverEnv() {
   const env = { ...process.env, PORT: String(PORT), NODE_ENV: 'test', JARCTECH_ENV_FILE: 'none' };
-  for (const name of ['MONGODB_URI', 'MONGODB_DB_NAME', 'HOST']) delete env[name];
+  for (const name of ['MONGODB_URI', 'MONGODB_DB_NAME', 'HOST', 'AUTH_MODE', 'ENTRA_TENANT_ID', 'ENTRA_CLIENT_ID', 'ENTRA_CLIENT_SECRET', 'APP_BASE_URL', 'SESSION_SECRET']) delete env[name];
   return env;
 }
 

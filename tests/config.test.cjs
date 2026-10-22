@@ -8,16 +8,22 @@ const { redact, secretsFromUri } = require('../server/redact.cjs');
 
 const SECRET = 'S3cret-Pa55';
 const problemsFor = env => { try { loadConfig(env); return []; } catch (err) { assert.ok(err instanceof ConfigError); return err.problems; } };
+// Valid-looking but fake Entra settings (no real tenant, app, or secret).
+const ENTRA = {
+  AUTH_MODE: 'entra', MONGODB_URI: 'mongodb://h/', MONGODB_DB_NAME: 'jt',
+  ENTRA_TENANT_ID: '11111111-2222-4333-8444-555555555555', ENTRA_CLIENT_ID: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+  ENTRA_CLIENT_SECRET: 'fake-client-secret-value', SESSION_SECRET: 'fake-session-secret-0123456789abcdefghij', APP_BASE_URL: 'http://localhost:4177', PORT: '4177'
+};
 
 test('no database settings: local prototype mode on 127.0.0.1:4175', () => {
   const c = loadConfig({});
-  assert.deepEqual({ ...c }, { nodeEnv: 'development', deployed: false, port: 4175, host: '127.0.0.1', database: null });
+  assert.deepEqual({ ...c }, { nodeEnv: 'development', deployed: false, port: 4175, host: '127.0.0.1', database: null, auth: { mode: 'demo' } });
 });
 
 test('PORT and HOST are honoured; Railway and production default to all interfaces', () => {
   assert.equal(loadConfig({ PORT: '8080' }).port, 8080);
   assert.equal(loadConfig({ PORT: '0' }).port, 0);
-  const railway = { RAILWAY_ENVIRONMENT_NAME: 'staging', PORT: '3000', MONGODB_URI: 'mongodb://h/', MONGODB_DB_NAME: 'jt' };
+  const railway = { ...ENTRA, APP_BASE_URL: 'https://jarctech.example', RAILWAY_ENVIRONMENT_NAME: 'staging', PORT: '3000' };
   assert.equal(loadConfig(railway).host, '0.0.0.0');
   assert.equal(loadConfig(railway).deployed, true);
   assert.equal(loadConfig({ ...railway, RAILWAY_ENVIRONMENT_NAME: undefined, NODE_ENV: 'production' }).host, '0.0.0.0');
@@ -64,4 +70,40 @@ test('redaction removes connection strings, usernames, and passwords (encoded or
   for (const s of ['jt_user', 'p@ss/word', 'p%40ss%2Fword', uri]) assert.ok(!out.includes(s), out);
   assert.equal(redact('mongodb://other:hunter22@h:27017/db'), 'mongodb://<redacted>@h:27017/db');
   assert.equal(redact('no secrets here'), 'no secrets here');
+});
+
+test('demo mode is local only and never a fallback for incomplete sign-in settings', () => {
+  assert.equal(loadConfig({}).auth.mode, 'demo');
+  assert.equal(loadConfig({ AUTH_MODE: 'demo' }).auth.mode, 'demo');
+  assert.match(problemsFor({ NODE_ENV: 'production', MONGODB_URI: 'mongodb://h/', MONGODB_DB_NAME: 'jt' }).join(), /AUTH_MODE=entra is required when deployed/);
+  assert.match(problemsFor({ AUTH_MODE: 'demo', RAILWAY_PROJECT_ID: 'x', MONGODB_URI: 'mongodb://h/', MONGODB_DB_NAME: 'jt' }).join(), /AUTH_MODE=entra is required when deployed/);
+  const { AUTH_MODE, ...withoutMode } = ENTRA;
+  assert.match(problemsFor(withoutMode).join(), /Entra settings are present but AUTH_MODE is not set/);
+  assert.match(problemsFor({ ENTRA_CLIENT_ID: ENTRA.ENTRA_CLIENT_ID }).join(), /AUTH_MODE is not set/);
+  assert.match(problemsFor({ AUTH_MODE: 'entra-ish' }).join(), /AUTH_MODE must be entra or demo/);
+});
+
+test('AUTH_MODE=entra requires complete, single-tenant settings and reports every problem without values', () => {
+  const c = loadConfig(ENTRA);
+  assert.deepEqual({ ...c.auth }, { mode: 'entra', tenantId: ENTRA.ENTRA_TENANT_ID, clientId: ENTRA.ENTRA_CLIENT_ID, clientSecret: ENTRA.ENTRA_CLIENT_SECRET, baseUrl: 'http://localhost:4177', sessionSecret: ENTRA.SESSION_SECRET, secureCookies: false });
+  const missing = problemsFor({ AUTH_MODE: 'entra' });
+  for (const name of ['MONGODB_URI and MONGODB_DB_NAME', 'ENTRA_TENANT_ID', 'ENTRA_CLIENT_ID', 'ENTRA_CLIENT_SECRET', 'APP_BASE_URL', 'SESSION_SECRET']) assert.ok(missing.some(p => p.includes(name)), name);
+  assert.match(problemsFor({ ...ENTRA, ENTRA_TENANT_ID: 'common' }).join(), /directory \(tenant\) ID, a GUID/);
+  assert.match(problemsFor({ ...ENTRA, ENTRA_TENANT_ID: 'organizations' }).join(), /directory \(tenant\) ID, a GUID/);
+  assert.match(problemsFor({ ...ENTRA, ENTRA_CLIENT_ID: 'my-app' }).join(), /application \(client\) ID, a GUID/);
+  assert.match(problemsFor({ ...ENTRA, ENTRA_CLIENT_SECRET: '<client-secret-value>' }).join(), /ENTRA_CLIENT_SECRET still contains a placeholder/);
+  assert.match(problemsFor({ ...ENTRA, SESSION_SECRET: 'too-short' }).join(), /at least 32 characters/);
+  assert.match(problemsFor({ ...ENTRA, SESSION_SECRET: 'same-value-for-both-secrets-0123456789', ENTRA_CLIENT_SECRET: 'same-value-for-both-secrets-0123456789' }).join(), /must be different/);
+  const leaky = problemsFor({ ...ENTRA, ENTRA_TENANT_ID: 'tenant-' + SECRET, SESSION_SECRET: SECRET });
+  for (const p of leaky) assert.ok(!p.includes(SECRET), p);
+});
+
+test('APP_BASE_URL must be https except localhost, have no path, and match the local port', () => {
+  assert.match(problemsFor({ ...ENTRA, APP_BASE_URL: 'http://jarctech.example' }).join(), /must use https/);
+  assert.match(problemsFor({ ...ENTRA, APP_BASE_URL: 'http://localhost:4177', NODE_ENV: 'production' }).join(), /must use https/);
+  assert.match(problemsFor({ ...ENTRA, APP_BASE_URL: 'http://localhost:4177/app' }).join(), /no path/);
+  assert.match(problemsFor({ ...ENTRA, APP_BASE_URL: 'http://localhost:4175' }).join(), /same port as PORT/);
+  assert.match(problemsFor({ ...ENTRA, APP_BASE_URL: 'not a url' }).join(), /full URL/);
+  const https = loadConfig({ ...ENTRA, APP_BASE_URL: 'https://jarctech.example/', PORT: '3000' });
+  assert.equal(https.auth.baseUrl, 'https://jarctech.example'); assert.equal(https.auth.secureCookies, true);
 });

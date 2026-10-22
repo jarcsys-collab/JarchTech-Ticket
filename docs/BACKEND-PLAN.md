@@ -15,7 +15,7 @@ Each step is its own branch and pull request. Steps 1–2 need no owner decision
 | 0 | Architecture decision record, this plan, `.env.example` | Done |
 | 1 | Finish the frontend module refactor: move ticket and change actions out of `app.js` behind a data adapter interface with a local (localStorage) adapter. No behavior change, verified the same way as earlier steps. CLAUDE.md requires this before browser state moves to the server. | Not started |
 | 2 | Server foundation. **Done:** settings validation with redacted messages, optional `.env`, Railway `PORT`/`HOST`, `/healthz` and `/readyz`, static UI serving, clean shutdown, MongoDB connection (ping only), and tests against a temporary database. **Remaining:** collection validators and indexes, which are added with the first collections in step 4. | The owner approved the `mongodb` driver and the development-only `mongodb-memory-server` by asking for this step |
-| 3 | Authentication, users, sessions, first-admin bootstrap, central permission policy, unauthorized-access tests | D1, D2 |
+| 3 | Authentication, users, sessions, first-admin bootstrap, central permission policy, unauthorized-access tests. **Implemented on `feature/entra-auth`** (mock-tested); the ticket permission policy moves to step 4 with the ticket API. | D1, D2 decided; first Admin's email pending |
 | 4 | Ticket API, and the UI switches to the API adapter in signed-in mode | Step 3 |
 | 5 | Projects and Gantt API (phase 4) | Step 4 |
 | 6 | Linked change lifecycle API (phase 5) | Step 4 |
