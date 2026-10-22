@@ -82,10 +82,14 @@ npm.cmd run walkthrough:failures
 
 ## Source map
 
+Browser scripts are classic scripts that share top-level names, so `index.html` loads them in dependency order: `timeline-core.js`, `ticket-core.js`, `ui-common.js`, `recovery-view.js`, `app.js`, `projects.js`. `projects.js` wraps `open` and `detail`, so those remain function declarations.
+
 | File | Responsibility |
 | --- | --- |
 | `public/ticket-core.js` | Statuses, demo identities, role visibility, progress, safe localStorage load/save, and stored-data recovery |
-| `public/app.js` | Seed data, ticket lifecycle, recovery screen, comments, notifications, linked change lifecycle |
+| `public/ui-common.js` | Shared display helpers (escaping, status pills, people, progress bars, toast) and the side drawer dialog with its close, overlay, and Escape handling |
+| `public/recovery-view.js` | Recovery screen for unreadable or invalid stored records: download, retry, and confirmed reset |
+| `public/app.js` | Seed data, app state, ticket list and detail, ticket lifecycle, comments, notifications, linked change lifecycle |
 | `public/projects.js` | Dated project creation, task forms, Gantt views, project detail edits |
 | `public/timeline-core.js` | Validated UTC calendar dates and inclusive timeline calculations |
 | `public/style.css`, `public/projects.css` | Base JARC styling and project/Gantt layouts |

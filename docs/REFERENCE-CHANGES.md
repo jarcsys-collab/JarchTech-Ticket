@@ -54,3 +54,11 @@ Intended behavior change: unreadable or structurally invalid stored data previou
 A stored value of exactly `null` (valid JSON, but not a records object) intentionally enters recovery mode as `invalid`. The earlier prototype replaced it with sample data. Only a missing record, where nothing is stored under the key, starts fresh sample data. This keeps one rule: anything stored that is not usable records is preserved and backed up, never silently replaced. Covered by the `JSON null` case in `tests/ticket-core.test.cjs`.
 
 Verified with `tests/ticket-core.test.cjs` (preservation, role filtering, progress, invalid data, failed backup, blocked saves, write failure, reset) and `npm run walkthrough`, an optional isolated headless-browser check of the full workflow plus recovery cases (see README).
+
+## Phase 1 - UI helper and recovery screen modules
+
+Behavior-preserving move on `feature/phase1-ui-modules`. No screens, markup, CSS classes, events, role rules, storage format, or workflow changed.
+
+- `public/ui-common.js`: `$`, `esc`, `toast`, `pill`, `progress`, `prog`, `person`, and the drawer dialog (`open`, `close`, close button, overlay click, Escape).
+- `public/recovery-view.js`: the recovery screen. `render()` now passes `session.recovery` and `store` to `recoveryView` instead of the function reading app state directly.
+- `detail`, `changeDetail`, and `render` stay in `app.js` because `projects.js` wraps them. `open` stays a function declaration for the same reason.

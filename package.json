@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.cjs",
     "dev": "node server.cjs",
-    "check": "node --check server.cjs && node --check public/app.js && node --check public/projects.js && node --check public/timeline-core.js && node --check public/ticket-core.js && node --check scripts/browser-walkthrough.mjs && node --check scripts/walkthrough-failure-paths.mjs",
+    "check": "node --check server.cjs && node --check public/app.js && node --check public/projects.js && node --check public/timeline-core.js && node --check public/ticket-core.js && node --check public/ui-common.js && node --check public/recovery-view.js && node --check scripts/browser-walkthrough.mjs && node --check scripts/walkthrough-failure-paths.mjs",
     "test": "node --test tests/*.test.cjs",
     "walkthrough": "node scripts/browser-walkthrough.mjs",
     "walkthrough:failures": "node scripts/walkthrough-failure-paths.mjs"
