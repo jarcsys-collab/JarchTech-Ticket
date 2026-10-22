@@ -8,5 +8,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+      # Tests use a temporary MongoDB from mongodb-memory-server; no shared database or secrets are involved.
+      - run: npm ci
       - run: npm run check
       - run: npm test

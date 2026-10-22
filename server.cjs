@@ -1,31 +1,90 @@
-const http = require('node:http');
-const fs = require('node:fs/promises');
+// Entry point: loads settings, serves the prototype with health checks, and shuts down cleanly.
+// Without MONGODB_URI the server runs exactly as the browser-only prototype; the UI never uses the database yet.
 const path = require('node:path');
-const ROOT = path.join(__dirname, 'public');
-const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml' };
-function createServer() {
-  return http.createServer(async (req, res) => {
-    if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405, { Allow: 'GET, HEAD' }); return res.end(); }
-    let name;
-    try { name = decodeURIComponent((req.url || '/').split('?')[0]); }
-    catch { res.writeHead(400); return res.end('Bad request'); }
-    if (name === '/') name = '/index.html';
-    const file = path.resolve(ROOT, '.' + name);
-    if (!file.startsWith(ROOT + path.sep)) { res.writeHead(403); return res.end('Forbidden'); }
-    try {
-      const bytes = await fs.readFile(file);
-      res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
-      res.end(req.method === 'HEAD' ? undefined : bytes);
-    } catch { res.writeHead(404); res.end('Not found'); }
-  });
+const { createServer } = require('./server/app.cjs');
+const { ConfigError, loadConfig, loadEnvFile } = require('./server/config.cjs');
+const { createDatabase } = require('./server/database.cjs');
+
+const SHUTDOWN_GRACE_MS = 8000;
+
+// Starts the server for an already validated config. Resolves once listening.
+async function start(config, { log = console } = {}) {
+  const database = createDatabase(config.database);
+  let shuttingDown = false;
+  const server = createServer({ database, isShuttingDown: () => shuttingDown, log });
+
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(config.port, config.host, () => { server.off('error', reject); resolve(); });
+    });
+  } catch (err) {
+    await database.close();
+    throw err;
+  }
+  const port = server.address().port;
+  log.log(`JarcTech Ticket: http://localhost:${port}`);
+  if (database.configured) {
+    log.log(`Database: ${database.name} configured. Checking connection...`);
+    database.ping(5000).then(r => r.ok
+      ? log.log('Database: connected.')
+      : log.error(`Database: ${r.reason}. The app keeps running and /readyz reports not ready.${r.error ? ' ' + r.error : ''}`));
+  } else {
+    log.log('Database: not configured. Running as the browser-only prototype.');
+  }
+
+  // Stop accepting connections, let in-flight requests finish (forced after the grace period), then close the database.
+  let stopping = null;
+  function shutdown(reason = 'Shutdown') {
+    return stopping ??= (async () => {
+      shuttingDown = true;
+      log.log(`${reason} received. Stopping...`);
+      await new Promise(resolve => {
+        server.close(() => resolve());
+        server.closeIdleConnections();
+        setTimeout(() => server.closeAllConnections(), SHUTDOWN_GRACE_MS).unref();
+      });
+      await database.close();
+      log.log('Shutdown complete.');
+    })();
+  }
+  return { server, database, port, shutdown };
 }
-if (require.main === module) {
-  const port = Number(process.env.PORT || 4175);
-  const server = createServer();
-  server.on('error', err => {
-    console.error(err.code === 'EADDRINUSE' ? `Port ${port} is in use. Set PORT to another value (for example 4176).` : err.message);
-    process.exitCode = 1;
-  });
-  server.listen(port, '127.0.0.1', () => console.log(`JarcTech Ticket: http://localhost:${port}`));
+
+async function main() {
+  // A local .env adds settings that are not already set; Railway variables and shell values win.
+  // Tests and the browser walkthrough set NODE_ENV=test or JARCTECH_ENV_FILE=none so a developer's .env is never used.
+  const envFile = process.env.JARCTECH_ENV_FILE ?? path.join(__dirname, '.env');
+  if (process.env.NODE_ENV !== 'test' && envFile !== 'none') {
+    const added = loadEnvFile(envFile);
+    if (added.length) console.log(`Loaded ${added.length} setting(s) from ${path.basename(envFile)}.`);
+  }
+
+  let config;
+  try { config = loadConfig(process.env); }
+  catch (err) {
+    if (!(err instanceof ConfigError)) throw err;
+    console.error(err.message);
+    process.exit(1);
+  }
+
+  let app;
+  try { app = await start(config); }
+  catch (err) {
+    console.error(err.code === 'EADDRINUSE' ? `Port ${config.port} is in use. Set PORT to another value (for example 4176).` : err.message);
+    process.exit(1);
+  }
+
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.on(signal, async () => {
+      if (app.stopping) process.exit(1); // second signal: stop immediately
+      app.stopping = true;
+      await app.shutdown(signal);
+      process.exit(0);
+    });
+  }
 }
-module.exports = { createServer };
+
+if (require.main === module) main();
+
+module.exports = { createServer, start };
