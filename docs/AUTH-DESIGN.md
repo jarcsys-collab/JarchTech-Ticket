@@ -4,7 +4,7 @@ Status: **implemented on `feature/entra-auth`** and tested with a mock Entra pro
 
 **Decided (2026-10-22):**
 - single company tenant; guests excluded
-- invite-only access
+- invite-only access as the default and the restorable policy; **beta access policy `tenant-members` (decided 2026-10-22)**: every member account of the configured JARC GROUP tenant may sign in without an Entra assignment or app invitation, and new users start as Requestor (see "Beta access policy" below)
 - roles managed by JarcTech Admins in the app
 - `openid-client`
 - Requestor name pre-filled from the profile, with ownership from the server session (enforced when the ticket API exists)
@@ -12,6 +12,27 @@ Status: **implemented on `feature/entra-auth`** and tested with a mock Entra pro
 - development base URL `http://localhost:4177`
 
 **Still open:** the first Admin's work email (asked when real configuration starts); production app registration and credential type.
+
+## Beta access policy (`ACCESS_POLICY=tenant-members`)
+
+**Purpose:** let the whole company try JarcTech Ticket during the beta without an Admin inviting each person. It is an explicit setting: with `ACCESS_POLICY` unset (or `invite-only`), the invite-only rules below apply unchanged.
+
+| Situation at sign-in | Result |
+| --- | --- |
+| Member of the configured tenant, no JarcTech account yet | Account created automatically as **Requestor** (status `active`, `autoAdmitted: true`), linked to the Entra object ID, and a `user.auto-admitted` event recorded |
+| Account already linked to this Entra object ID | Signs in with its existing role and status. A role set by an Admin is never reset. |
+| Pending invitation for this email | Bound exactly as in invite-only mode, **keeping the invited role** (this is how someone starts as Developer or Admin) |
+| A record for this email is disabled (including a revoked invitation) | **Refused** ("turned off"); no replacement account is created |
+| This email is already linked to a different Entra account | **Refused** (`account-conflict`) for an Admin to resolve |
+| No usable email or UPN in the token | Refused (`missing-identity`) |
+| Guest (`idp` claim from another provider, or `acct=1`), personal Microsoft account (`idp` live.com, or the consumer tenant `9188040d-…`), or another tenant's `tid` | **Refused** under both policies; nothing is created |
+
+**Unchanged in both policies:**
+- **Sign-in checks:** ID token validation, PKCE, state and nonce, the single-tenant issuer, and signature checks.
+- **Sessions:** server-side storage, the 8-hour idle and 24-hour absolute limits, logout, and immediate revocation for disabled users.
+- **Role rules:** roles are never read from claims (`roles`, `groups`, `wids`, or anything else) or from the browser. The automatic role is a server constant, `Requestor`. Admin and Developer come only from an Admin's change or an invitation naming that role. The self-change and last-Admin protections still apply.
+
+**Entra side:** for the beta, the enterprise application's **Assignment required = No**, so Entra lets every member through to the app, where the rules above apply. To return to invite-only, remove `ACCESS_POLICY`, restart, and optionally set Assignment required back to Yes. Auto-admitted Requestors keep their accounts until an Admin disables them.
 
 > **Current limitation:** sign-in, roles, sessions, and user management are server-protected. **Ticket ownership and developer filtering are not production-ready.** Tickets are still stored only in each browser; the Requestor name is a display pre-fill; the Developer view uses the demo identity. This is not secure multi-user ticketing until the ticket API exists.
 
@@ -155,7 +176,7 @@ A **new, dedicated** registration is created, so existing Entra applications sta
 | Credentials | A client secret with an expiry date (12 months suggested), entered only in `.env` | A client secret or certificate, entered only in Railway variables; expiry reminder set |
 | API permissions | Microsoft Graph delegated `openid`, `profile`, `email` (admin consent if the tenant blocks user consent). `User.Read` isn't needed. | Same |
 | Token configuration | Optional claim `email` on the ID token | Same |
-| Enterprise application → Assignment required | Yes; assign the developers who test | Yes; assign the allowed users or security group |
+| Enterprise application → Assignment required | **No** for the beta (`ACCESS_POLICY=tenant-members`). Yes, with the testers assigned, if invite-only is restored. | Same rule as development |
 | App roles | None (roles are managed in the app; see decision 3) | None |
 
 ## Decisions needed

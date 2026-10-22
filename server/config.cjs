@@ -12,6 +12,10 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ENTRA_VARS = ['ENTRA_TENANT_ID', 'ENTRA_CLIENT_ID', 'ENTRA_CLIENT_SECRET', 'APP_BASE_URL', 'SESSION_SECRET'];
 const LOCAL_HOSTS = ['localhost', '127.0.0.1'];
 const MIN_SESSION_SECRET = 32;
+// invite-only (default): only people an Admin invited. tenant-members: every member account of the configured
+// tenant may sign in and is added as Requestor on first sign-in. Guests and other tenants are refused in both.
+const ACCESS_POLICIES = ['invite-only', 'tenant-members'];
+const CONSUMER_TENANT = '9188040d-6c67-4c5b-b112-36a304b66dad'; // personal Microsoft accounts
 
 class ConfigError extends Error {
   constructor(problems) {
@@ -90,7 +94,8 @@ function loadAuth(env, { deployed, port, database, problems }) {
   const value = name => (env[name] || '').trim();
   if (!mode || mode === 'demo') {
     if (deployed) problems.push('AUTH_MODE=entra is required when deployed. The browser-only demo mode is for local use only.');
-    else if (!mode && ENTRA_VARS.some(value)) problems.push('Microsoft Entra settings are present but AUTH_MODE is not set. Set AUTH_MODE=entra to require sign-in, or AUTH_MODE=demo for the browser-only demo.');
+    else if (!mode && [...ENTRA_VARS, 'ACCESS_POLICY'].some(value)) problems.push('Microsoft Entra settings are present but AUTH_MODE is not set. Set AUTH_MODE=entra to require sign-in, or AUTH_MODE=demo for the browser-only demo.');
+    else if (mode === 'demo' && value('ACCESS_POLICY')) problems.push('ACCESS_POLICY applies only when AUTH_MODE=entra. Remove it for demo mode.');
     return { mode: 'demo' };
   }
   if (mode !== 'entra') { problems.push('AUTH_MODE must be entra or demo.'); return { mode: 'demo' }; }
@@ -102,6 +107,9 @@ function loadAuth(env, { deployed, port, database, problems }) {
     else if (PLACEHOLDER.test(value(name))) problems.push(`${name} still contains a placeholder. Enter the real value in .env or Railway variables.`);
   }
   if (value('ENTRA_TENANT_ID') && !GUID.test(value('ENTRA_TENANT_ID'))) problems.push('ENTRA_TENANT_ID must be the directory (tenant) ID, a GUID. Names such as common or organizations are not allowed because only the company tenant may sign in.');
+  if (value('ENTRA_TENANT_ID').toLowerCase() === CONSUMER_TENANT) problems.push('ENTRA_TENANT_ID is the personal Microsoft account tenant. Use the company directory (tenant) ID.');
+  const accessPolicy = value('ACCESS_POLICY') || 'invite-only';
+  if (!ACCESS_POLICIES.includes(accessPolicy)) problems.push('ACCESS_POLICY must be invite-only or tenant-members.');
   if (value('ENTRA_CLIENT_ID') && !GUID.test(value('ENTRA_CLIENT_ID'))) problems.push('ENTRA_CLIENT_ID must be the application (client) ID, a GUID.');
   const secret = value('SESSION_SECRET');
   if (secret && secret.length < MIN_SESSION_SECRET) problems.push(`SESSION_SECRET must be at least ${MIN_SESSION_SECRET} characters of random data.`);
@@ -127,7 +135,8 @@ function loadAuth(env, { deployed, port, database, problems }) {
     clientSecret: value('ENTRA_CLIENT_SECRET'),
     baseUrl,
     sessionSecret: secret,
-    secureCookies: baseUrl.startsWith('https:')
+    secureCookies: baseUrl.startsWith('https:'),
+    accessPolicy
   };
 }
 

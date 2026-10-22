@@ -66,6 +66,12 @@ const write = (path, cookie, body, method = 'POST') => call(path, { method, cook
 test('before db:setup the server is not ready; after it, ready', async () => {
   const before = await call('/readyz');
   assert.equal(before.status, 503); assert.deepEqual(before.json, { status: 'not-ready', database: 'schema-missing' });
+  // Sign-in must not start (or let MongoDB create collections implicitly) before db:setup.
+  const login = await call('/auth/login');
+  assert.equal(login.status, 503); assert.match(login.text, /Sign-in is not set up yet/); assert.equal(login.location, null);
+  const callback = await call('/auth/callback?code=x&state=y');
+  assert.equal(callback.status, 503);
+  assert.deepEqual(await db.listCollections().toArray(), [], 'nothing created before db:setup');
   await ensureSchema(db);
   const ready = await call('/readyz');
   assert.equal(ready.status, 200); assert.deepEqual(ready.json, { status: 'ready', database: 'connected' });
@@ -106,7 +112,7 @@ test('an invited person signs in once: the invitation binds to their Entra objec
   assert.equal(me.json.user.role, 'Requestor'); assert.equal(me.json.user.email, 'person2@jarc.example');
   const index = await call('/', { cookie: res.session });
   assert.equal(index.status, 200);
-  assert.match(index.text, /window\.JARC_SESSION=Object\.freeze\(\{"displayName":"Person 2","email":"person2@jarc.example","role":"Requestor"\}\)/);
+  assert.match(index.text, /window\.JARC_SESSION=Object\.freeze\(\{"displayName":"Person 2","email":"person2@jarc.example","role":"Requestor","accessPolicy":"invite-only"\}\)/);
   assert.match(index.text, /<script src="auth-client\.js"><\/script><\/body>/);
   // A different Microsoft account with the same email can never take over the already-bound invitation.
   const other = await signIn(person(3, { email: 'person2@jarc.example', preferred_username: 'person2@jarc.example' }));

@@ -71,10 +71,21 @@ There are two modes, chosen with `AUTH_MODE`:
 - The server refuses to start if `AUTH_MODE=entra` is missing any setting, if Entra settings are present without `AUTH_MODE`, or if a deployed server would run in demo mode.
 - If sign-in fails at runtime (Microsoft is unreachable, or a response is invalid), the user sees an error page. **It never falls back to demo mode.**
 
-**Who can get in:**
-- **Invitations only.** Signing in with Microsoft never grants access or a role on its own. A person must first be invited by email by a JarcTech Admin, or be the first Admin created with the bootstrap command.
-- On their first sign-in, the invitation is permanently tied to their Entra account (object ID).
-- Guests from other organizations, accounts from other tenants, and disabled users are denied with an "Access not granted" page. Admins can see those attempts in the sign-in log.
+**Who can get in: the access policy (`ACCESS_POLICY`)**
+
+| Policy | Who can sign in | New accounts |
+| --- | --- | --- |
+| `invite-only` (default when unset) | Only people a JarcTech Admin invited by email, plus the first Admin created with the bootstrap command | Created only by an Admin invitation, with the role the Admin chose |
+| `tenant-members` (**current beta policy**) | Every **member** account of the configured JARC GROUP tenant (`ENTRA_TENANT_ID`). No Entra assignment and no app invitation are needed. | Created automatically on first sign-in, **always as Requestor** |
+
+**Rules in both policies:**
+- **Refused:** guests (B2B accounts from other organizations), personal Microsoft accounts, accounts from any other tenant, and disabled users all get an "Access not granted" page, and no account is created. Admins can see refused attempts in the sign-in log.
+- **Roles never come from Microsoft.** Admin and Developer are given only by a JarcTech Admin on the Users screen, or by an invitation that names that role. Role, group, and directory-role claims are ignored, as is anything sent by the browser.
+- **Existing records win.** An invitation keeps its role on first sign-in. Roles an Admin set are kept on later sign-ins and never reset to Requestor. A disabled or revoked person stays locked out: beta access never creates a replacement account for a disabled email.
+- **One account per Microsoft account.** The account is permanently linked to the person's Entra object ID. If an email is already linked to a different Microsoft account, sign-in is refused for an Admin to resolve.
+- **Restoring invite-only:** remove `ACCESS_POLICY` (or set it to `invite-only`) and restart. Auto-admitted Requestors keep their accounts; an Admin can disable any of them on the Users screen.
+
+For the beta, the app registration's enterprise application must have **Assignment required = No**. Otherwise Entra itself blocks members who are not individually assigned.
 
 **Roles:**
 - `Requestor`, `Admin` and `Developer` are stored on the server and read on every request.
@@ -115,6 +126,7 @@ ENTRA_TENANT_ID=<Directory (tenant) ID>
 ENTRA_CLIENT_ID=<Application (client) ID>
 ENTRA_CLIENT_SECRET=<client secret Value>
 SESSION_SECRET=<output of the command below>
+ACCESS_POLICY=tenant-members   # beta; remove this line to return to invite-only
 # MONGODB_URI and MONGODB_DB_NAME stay as they are (jarctech_ticket_dev)
 ```
 
@@ -178,6 +190,7 @@ $env:WALKTHROUGH_SCREENSHOTS = 'tmp'; npm.cmd run walkthrough
 - that a Requestor cannot use the admin API
 - sign-out
 - the Admin Users screen: invite, revoke, and role change
+- a second scenario with `ACCESS_POLICY=tenant-members` (beta): a member joins as Requestor, Admin claims are ignored, guests, personal accounts, other tenants and disabled members are refused, an invited Developer keeps the role, and the Users screen explains the policy
 
 Ports are chosen automatically. It uses a temporary browser profile and cleans up after success, failure, or Ctrl+C. Set `AUTH_CHECK_SCREENSHOTS` to a folder (for example `tmp/auth`) to save screenshots. It is not part of `npm test` or GitHub Actions.
 

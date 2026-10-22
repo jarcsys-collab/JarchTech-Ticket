@@ -67,7 +67,10 @@
         : `<select data-user="${esc(u.id)}" data-field="status" aria-label="Access for ${esc(u.email)}"><option value="active" ${u.status !== 'disabled' ? 'selected' : ''}>${enabledLabel}</option><option value="disabled" ${u.status === 'disabled' ? 'selected' : ''}>${disabledLabel}</option></select>`;
       return `<tr class="${self ? 'self' : ''}"><td><span class="ticket-name">${esc(u.displayName)}</span><span class="ticket-id">${esc(u.email)}</span></td><td>${role}</td><td>${access}</td></tr>`;
     }).join('');
-    open(`<div class="tagline">ADMIN</div><h2>Users</h2><p>Only invited people can use JarcTech Ticket. An invitation becomes active when that person first signs in with the same Microsoft work email. Roles are set here, never by the sign-in itself.</p>
+    const policy = me.accessPolicy === 'tenant-members'
+      ? 'Beta access: every member account of the company tenant can sign in and starts as a Requestor. Guests and other organizations are refused. Invite someone here to give them a different role from their first sign-in.'
+      : 'Only invited people can use JarcTech Ticket. An invitation becomes active when that person first signs in with the same Microsoft work email.';
+    open(`<div class="tagline">ADMIN</div><h2>Users</h2><p>${policy} Roles are set here, never by the sign-in itself. Disabled people cannot sign in under either policy.</p>
       <div class="table-wrap"><table class="users-table"><thead><tr><th>Person</th><th>Role</th><th>Access</th></tr></thead><tbody>${rows}</tbody></table></div>
       <h3>Invite someone</h3><form id="invite-form"><div class="field-grid"><label class="full">Work email *<input name="email" type="email" required autocomplete="off"></label><label>Display name<input name="displayName" maxlength="120"></label><label>Role *<select name="role" required>${ROLES.map(r => `<option>${r}</option>`).join('')}</select></label></div><div class="actions"><button class="primary">Send invitation</button></div></form>`);
     document.querySelectorAll('[data-user]').forEach(select => select.onchange = async () => {

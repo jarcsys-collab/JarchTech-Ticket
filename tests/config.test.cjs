@@ -85,7 +85,7 @@ test('demo mode is local only and never a fallback for incomplete sign-in settin
 
 test('AUTH_MODE=entra requires complete, single-tenant settings and reports every problem without values', () => {
   const c = loadConfig(ENTRA);
-  assert.deepEqual({ ...c.auth }, { mode: 'entra', tenantId: ENTRA.ENTRA_TENANT_ID, clientId: ENTRA.ENTRA_CLIENT_ID, clientSecret: ENTRA.ENTRA_CLIENT_SECRET, baseUrl: 'http://localhost:4177', sessionSecret: ENTRA.SESSION_SECRET, secureCookies: false });
+  assert.deepEqual({ ...c.auth }, { mode: 'entra', tenantId: ENTRA.ENTRA_TENANT_ID, clientId: ENTRA.ENTRA_CLIENT_ID, clientSecret: ENTRA.ENTRA_CLIENT_SECRET, baseUrl: 'http://localhost:4177', sessionSecret: ENTRA.SESSION_SECRET, secureCookies: false, accessPolicy: 'invite-only' });
   const missing = problemsFor({ AUTH_MODE: 'entra' });
   for (const name of ['MONGODB_URI and MONGODB_DB_NAME', 'ENTRA_TENANT_ID', 'ENTRA_CLIENT_ID', 'ENTRA_CLIENT_SECRET', 'APP_BASE_URL', 'SESSION_SECRET']) assert.ok(missing.some(p => p.includes(name)), name);
   assert.match(problemsFor({ ...ENTRA, ENTRA_TENANT_ID: 'common' }).join(), /directory \(tenant\) ID, a GUID/);
@@ -106,4 +106,15 @@ test('APP_BASE_URL must be https except localhost, have no path, and match the l
   assert.match(problemsFor({ ...ENTRA, APP_BASE_URL: 'not a url' }).join(), /full URL/);
   const https = loadConfig({ ...ENTRA, APP_BASE_URL: 'https://jarctech.example/', PORT: '3000' });
   assert.equal(https.auth.baseUrl, 'https://jarctech.example'); assert.equal(https.auth.secureCookies, true);
+});
+
+test('ACCESS_POLICY is explicit: invite-only by default, tenant-members only when set, never in demo mode', () => {
+  assert.equal(loadConfig(ENTRA).auth.accessPolicy, 'invite-only', 'unset means invite-only, so removing the line restores it');
+  assert.equal(loadConfig({ ...ENTRA, ACCESS_POLICY: 'invite-only' }).auth.accessPolicy, 'invite-only');
+  assert.equal(loadConfig({ ...ENTRA, ACCESS_POLICY: 'tenant-members' }).auth.accessPolicy, 'tenant-members');
+  assert.match(problemsFor({ ...ENTRA, ACCESS_POLICY: 'everyone' }).join(), /ACCESS_POLICY must be invite-only or tenant-members/);
+  assert.match(problemsFor({ ...ENTRA, ACCESS_POLICY: 'Tenant-Members' }).join(), /ACCESS_POLICY must be/);
+  assert.match(problemsFor({ AUTH_MODE: 'demo', ACCESS_POLICY: 'tenant-members' }).join(), /applies only when AUTH_MODE=entra/);
+  assert.match(problemsFor({ ACCESS_POLICY: 'tenant-members' }).join(), /AUTH_MODE is not set/);
+  assert.match(problemsFor({ ...ENTRA, ENTRA_TENANT_ID: '9188040d-6c67-4c5b-b112-36a304b66dad' }).join(), /personal Microsoft account tenant/);
 });

@@ -28,14 +28,22 @@ const DENIED = {
   disabled: 'Your access to JarcTech Ticket has been turned off. Contact a JarcTech Ticket administrator if you need it restored.',
   guest: 'Guest accounts from other organizations cannot use JarcTech Ticket. Sign in with your company account.',
   'wrong-tenant': 'This account belongs to a different organization. Sign in with your company account.',
-  'missing-identity': 'Microsoft did not return a stable account identifier, so access cannot be checked.'
+  'missing-identity': 'Microsoft did not return a stable account identifier and work email, so access cannot be checked.',
+  'personal-account': 'Personal Microsoft accounts cannot use JarcTech Ticket. Sign in with your company account.',
+  'account-conflict': 'Another JarcTech Ticket account already uses this work email with a different Microsoft account. Ask a JarcTech Ticket administrator to resolve it.'
+};
+
+const SIGN_IN_MESSAGE = {
+  'invite-only': 'Use your company Microsoft account. Access is by invitation from a JarcTech Ticket administrator.',
+  'tenant-members': 'Use your company Microsoft account. During the beta, all company member accounts can sign in; new users start as Requestors.'
 };
 
 const pages = {
-  signIn: () => page({ title: 'Sign in', heading: 'Sign in to JarcTech Ticket', message: 'Use your company Microsoft account. Access is by invitation from a JarcTech Ticket administrator.', action: signInButton() }),
+  signIn: (accessPolicy = 'invite-only') => page({ title: 'Sign in', heading: 'Sign in to JarcTech Ticket', message: SIGN_IN_MESSAGE[accessPolicy] || SIGN_IN_MESSAGE['invite-only'], action: signInButton() }),
   denied: reason => page({ title: 'Access not granted', heading: 'Access not granted', message: DENIED[reason] || DENIED['not-invited'], action: signInButton('Sign in with a different account'), note: 'No ticket data was opened.' }),
   signedOut: () => page({ title: 'Signed out', heading: 'You have signed out', message: 'Your JarcTech Ticket session has ended.', action: signInButton('Sign in again') }),
   failed: message => page({ title: 'Sign-in failed', heading: 'Sign-in could not be completed', message, action: signInButton('Try again') }),
+  notSetUp: () => page({ title: 'Sign-in not set up', heading: 'Sign-in is not set up yet', message: 'The JarcTech Ticket database has not been prepared for sign-in. An administrator needs to complete the one-time setup.' }),
   unavailable: () => page({ title: 'Sign-in unavailable', heading: 'Sign-in is temporarily unavailable', message: 'JarcTech Ticket could not reach Microsoft sign-in. Please try again in a few minutes.', action: signInButton('Try again') })
 };
 
