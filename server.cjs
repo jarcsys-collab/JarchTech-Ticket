@@ -27,9 +27,11 @@ async function start(config, { log = console, oidc, now } = {}) {
   }
   const port = server.address().port;
   log.log(`JarcTech Ticket: http://localhost:${port}`);
-  log.log(auth
-    ? 'Sign-in: Microsoft Entra ID required. Access is by admin invitation only.'
-    : 'Sign-in: none. Browser-only demo mode for local use; records stay in this browser.');
+  log.log(!auth
+    ? 'Sign-in: none. Browser-only demo mode for local use; records stay in this browser.'
+    : config.auth.accessPolicy === 'tenant-members'
+      ? 'Sign-in: Microsoft Entra ID required. Access policy tenant-members: member accounts of the configured tenant may sign in; new users start as Requestor. Guests and other tenants are refused.'
+      : 'Sign-in: Microsoft Entra ID required. Access policy invite-only: access is by admin invitation only.');
   if (database.configured) {
     log.log(`Database: ${database.name} configured. Checking connection...`);
     database.ping(5000).then(r => r.ok

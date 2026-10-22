@@ -27,7 +27,20 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
     return found ? found.user : null;
   }
 
+  // Sign-in writes users, sessions, and events. Until `npm run db:setup` has created those collections with their
+  // validators and indexes, refuse instead of letting MongoDB create them implicitly. Read-only check.
+  let schemaReady = false;
+  async function requireSchema(req, res) {
+    if (schemaReady) return true;
+    const missing = await database.missingSchema();
+    if (!missing.length) { schemaReady = true; return true; }
+    log.error(`Sign-in refused: sign-in collections or indexes are missing (${missing.join(', ')}). Run npm run db:setup.`);
+    sendHtml(req, res, 503, pages.notSetUp());
+    return false;
+  }
+
   async function login(req, res) {
+    if (!await requireSchema(req, res)) return;
     try {
       const { url, flow } = await oidc.begin();
       const value = seal({ ...flow, exp: Date.now() + FLOW_MS }, auth.sessionSecret, FLOW_PURPOSE);
@@ -39,6 +52,7 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
   }
 
   async function callback(req, res) {
+    if (!await requireSchema(req, res)) return;
     const clearFlow = { 'Set-Cookie': clear(FLOW) };
     const url = new URL(req.url, auth.baseUrl);
     const error = url.searchParams.get('error');
@@ -57,7 +71,7 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
       log.error(`Sign-in rejected: ${describe(err)}`);
       return sendHtml(req, res, 401, pages.failed('The sign-in response could not be verified. Please try again.'), clearFlow);
     }
-    const result = await store.admit(claims, auth.tenantId);
+    const result = await store.admit(claims, auth.tenantId, { accessPolicy: auth.accessPolicy });
     if (result.denied) {
       log.log(`Sign-in denied (${result.denied}).`);
       return sendHtml(req, res, 403, pages.denied(result.denied), clearFlow);
@@ -106,7 +120,7 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
       if (pathname === '/auth/callback' && req.method === 'GET') { await callback(req, res); return true; }
       if (pathname === '/auth/logout' && req.method === 'POST') { await logout(req, res); return true; }
       if (pathname === '/auth/signin' && req.method === 'GET') {
-        if (await currentUser(req)) redirect(res, '/'); else sendHtml(req, res, 200, pages.signIn());
+        if (await currentUser(req)) redirect(res, '/'); else sendHtml(req, res, 200, pages.signIn(auth.accessPolicy));
         return true;
       }
       if (pathname === '/auth/signed-out' && req.method === 'GET') { sendHtml(req, res, 200, pages.signedOut()); return true; }
@@ -126,7 +140,7 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
   async function gate(req, res, pathname) {
     if (PUBLIC_ASSETS.has(pathname)) return { public: true };
     const user = await currentUser(req);
-    if (user) return { user };
+    if (user) return { user, accessPolicy: auth.accessPolicy };
     if (pathname === '/' || pathname.endsWith('.html')) redirect(res, '/auth/signin');
     else { res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); res.end('Sign in required'); }
     return null;
@@ -136,8 +150,9 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
 }
 
 // Adds the signed-in user's display details to index.html. Values are JSON with < escaped, so they cannot end the script.
-function injectSession(html, user) {
-  const data = JSON.stringify({ displayName: user.displayName || user.email, email: user.email, role: user.role }).replace(/</g, '\\u003c');
+// accessPolicy is display-only here (it explains who can sign in on the Users screen); the server enforces it.
+function injectSession(html, user, accessPolicy = 'invite-only') {
+  const data = JSON.stringify({ displayName: user.displayName || user.email, email: user.email, role: user.role, accessPolicy }).replace(/</g, '\\u003c');
   return html
     .replace('<script src="timeline-core.js"></script>', `<script>window.JARC_SESSION=Object.freeze(${data});</script><script src="timeline-core.js"></script>`)
     .replace('</body>', '<script src="auth-client.js"></script></body>');

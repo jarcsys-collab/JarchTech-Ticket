@@ -43,14 +43,14 @@ const results = [];
 const check = (name, ok, info = '') => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  -- ' + info : ''}`); };
 
 // Everything this script starts, so cleanup (also on Ctrl+C) touches nothing else.
-let mongod, mongo, entra, app, browser, profile, ws, cleaning, interrupted = false;
+let mongod, mongo, entra, app, betaApp, browser, profile, ws, cleaning, interrupted = false;
 function cleanup() {
   return cleaning ??= (async () => {
     try { ws?.close(); } catch {}
     if (browser && browser.exitCode === null && browser.signalCode === null) {
       await new Promise(resolve => { const t = setTimeout(resolve, 5000); browser.once('exit', () => { clearTimeout(t); resolve(); }); browser.kill(); });
     }
-    for (const step of [() => app?.shutdown(), () => entra?.close(), () => mongo?.close(), () => mongod?.stop()]) { try { await step(); } catch {} }
+    for (const step of [() => app?.shutdown(), () => betaApp?.shutdown(), () => entra?.close(), () => mongo?.close(), () => mongod?.stop()]) { try { await step(); } catch {} }
     for (let i = 0; profile && i < 40 && fs.existsSync(profile); i++) { try { fs.rmSync(profile, { recursive: true, force: true }); } catch { await sleep(250); } }
     if (profile && fs.existsSync(profile)) console.error(`Could not delete the temporary browser profile: ${profile}`);
   })();
@@ -87,6 +87,22 @@ try {
     NODE_ENV: 'test', PORT: String(port), MONGODB_URI: mongod.getUri(), MONGODB_DB_NAME: 'jarctech_auth_screens',
     AUTH_MODE: 'entra', ENTRA_TENANT_ID: TENANT, ENTRA_CLIENT_ID: CLIENT, ENTRA_CLIENT_SECRET: 'screens-check-client-secret', APP_BASE_URL: origin, SESSION_SECRET: 'screens-check-session-secret-0123456789abcdef'
   }), { log: { log() {}, error(...a) { console.log('server error:', a.join(' ')); } }, oidc: { issuer: entra.issuer, allowInsecure: true } });
+
+  // Second scenario: ACCESS_POLICY=tenant-members (beta), its own server, database, and browser origin.
+  const betaDb = mongo.db('jarctech_auth_screens_beta');
+  await ensureSchema(betaDb);
+  const betaStore = createStore(betaDb);
+  await betaDb.collection('users').insertOne({ email: 'boss@jarc.example', role: 'Admin', status: 'active', displayName: 'Bea Boss', tenantId: TENANT, entraObjectId: account(31).oid, createdAt: new Date(), updatedAt: new Date() });
+  const betaAdmin = await betaDb.collection('users').findOne({ email: 'boss@jarc.example' });
+  await betaStore.inviteUser({ email: 'devon@jarc.example', role: 'Developer', displayName: 'Devon Developer' }, betaAdmin);
+  await betaDb.collection('users').insertOne({ email: 'dora@jarc.example', role: 'Requestor', status: 'disabled', displayName: 'Dora Disabled', tenantId: TENANT, entraObjectId: account(34).oid, createdAt: new Date(), updatedAt: new Date() });
+  const betaPort = await freePort();
+  const betaOrigin = `http://localhost:${betaPort}`;
+  betaApp = await start(loadConfig({
+    NODE_ENV: 'test', PORT: String(betaPort), MONGODB_URI: mongod.getUri(), MONGODB_DB_NAME: 'jarctech_auth_screens_beta', ACCESS_POLICY: 'tenant-members',
+    AUTH_MODE: 'entra', ENTRA_TENANT_ID: TENANT, ENTRA_CLIENT_ID: CLIENT, ENTRA_CLIENT_SECRET: 'screens-check-client-secret', APP_BASE_URL: betaOrigin, SESSION_SECRET: 'screens-check-beta-session-secret-0123456789'
+  }), { log: { log() {}, error(...a) { console.log('server error:', a.join(' ')); } }, oidc: { issuer: entra.issuer, allowInsecure: true } });
+  var beta = { db: betaDb, origin: betaOrigin };
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'jarctech-authcheck-'));
   browser = spawn(BROWSER, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-sync', '--hide-scrollbars', '--force-device-scale-factor=1', `--user-data-dir=${profile}`, `--remote-debugging-port=${debug}`, '--window-size=1400,1000', 'about:blank'], { stdio: 'ignore' });
   browser.on('error', err => console.error(`Could not start the browser: ${err.message}`));
@@ -150,6 +166,49 @@ try {
     const ritaId = String((await db.collection('users').findOne({ email: 'rita@jarc.example' }))._id);
     await js(`{const s=document.querySelector('select[data-user="${ritaId}"][data-field="role"]');s.value='Developer';s.dispatchEvent(new Event('change'))} true`); await sleep(800);
     check('Admin role change is saved on the server', (await db.collection('users').findOne({ email: 'rita@jarc.example' })).role === 'Developer');
+
+    // ---------- Scenario 2: ACCESS_POLICY=tenant-members (beta) ----------
+    const betaUsers = beta.db.collection('users');
+    const signInAs = async claims => { entra.signInNext(claims); await clickAndLoad('a.primary'); };
+    const signOutBeta = async () => { const l = event('Page.loadEventFired'); await js(`document.querySelector('#sign-out').click(); true`); await l; await sleep(300); await nav(`${beta.origin}/auth/signin`); };
+    await nav(`${beta.origin}/`);
+    check('beta: sign-in page explains that company members can sign in as Requestors', await here() === '/auth/signin' && await js(`document.body.textContent.includes('all company member accounts can sign in; new users start as Requestors')`));
+    await shot('11-beta-sign-in.png');
+
+    await signInAs(account(32, 'Mia Member', 'mia@jarc.example'));
+    check('beta: a member with no invitation lands in the app as Requestor', await here() === '/' && await js(`document.querySelector('.signed-in-as').textContent==='Mia Member · Requestor' && document.querySelector('#page-title').textContent==='My ticket' && !document.querySelector('#manage-users') && document.querySelector('.demo-role-label').hidden`));
+    const mia = await betaUsers.findOne({ email: 'mia@jarc.example' });
+    check('beta: the new account was created as an active Requestor linked to the Entra account', mia?.role === 'Requestor' && mia.status === 'active' && mia.autoAdmitted === true && mia.entraObjectId === account(32).oid);
+    await shot('12-beta-member-app.png');
+    await signOutBeta();
+
+    await signInAs({ ...account(33, 'Ari Admin-Claims', 'ari@jarc.example'), roles: ['Admin'], wids: ['62e90394-69f5-4237-9190-012177145e10'], groups: ['admins'] });
+    check('beta: Admin role, group, and directory-role claims do not grant Admin', await js(`document.querySelector('.signed-in-as').textContent==='Ari Admin-Claims · Requestor' && !document.querySelector('#manage-users')`) && (await betaUsers.findOne({ email: 'ari@jarc.example' })).role === 'Requestor');
+    check('beta: a member cannot call the admin API', await js(`fetch('/api/v1/users').then(r=>r.status)`) === 403);
+    await signOutBeta();
+
+    for (const [label, claims, text] of [
+      ['a guest from another organization', { ...account(35, 'Gail Guest', 'gail@partner.example'), idp: 'https://sts.windows.net/99999999-9999-4999-8999-999999999999/' }, 'Guest accounts'],
+      ['a personal Microsoft account', { ...account(36, 'Pat Personal', 'pat@outlook.example'), idp: 'live.com' }, 'Personal Microsoft accounts'],
+      ['an account from another tenant', { ...account(37, 'Otto Other', 'otto@other.example'), tid: '99999999-9999-4999-8999-999999999999' }, 'different organization'],
+      ['a disabled member', account(34, 'Dora Disabled', 'dora@jarc.example'), 'turned off']
+    ]) {
+      await signInAs(claims);
+      check(`beta: ${label} is refused`, await js(`document.body.textContent.includes('Access not granted') && document.body.textContent.includes(${JSON.stringify(text)}) && !document.querySelector('#app')`));
+      if (label === 'a guest from another organization') await shot('13-beta-guest-refused.png');
+      await nav(`${beta.origin}/auth/signin`);
+    }
+    check('beta: no accounts were created for refused sign-ins', await betaUsers.countDocuments({ email: { $in: ['gail@partner.example', 'pat@outlook.example', 'otto@other.example'] } }) === 0 && await betaUsers.countDocuments({ email: 'dora@jarc.example' }) === 1);
+
+    await signInAs(account(38, 'Devon Developer', 'devon@jarc.example'));
+    check('beta: an Admin-invited Developer keeps the Developer role', await js(`document.querySelector('.signed-in-as').textContent==='Devon Developer · Developer'`) && (await betaUsers.findOne({ email: 'devon@jarc.example' })).role === 'Developer');
+    await signOutBeta();
+
+    await signInAs(account(31, 'Bea Boss', 'boss@jarc.example'));
+    await js(`document.querySelector('#manage-users').click(); true`); await sleep(600);
+    check('beta: the Admin Users screen explains the beta access policy and lists auto-admitted members', await js(`document.querySelector('.drawer').textContent.includes('Beta access: every member account of the company tenant can sign in and starts as a Requestor') && document.querySelector('.users-table').textContent.includes('mia@jarc.example')`));
+    await shot('14-beta-users-screen.png');
+
     check('no page errors', errors.length === 0, errors.join(' | '));
   } catch (err) {
     if (!interrupted) check('check crashed', false, err.stack);

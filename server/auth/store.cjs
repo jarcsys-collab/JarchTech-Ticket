@@ -17,6 +17,13 @@ class StoreError extends Error {
 const normalizeEmail = value => String(value || '').trim().toLowerCase();
 const publicUser = u => ({ id: String(u._id), email: u.email, displayName: u.displayName || u.email, role: u.role, status: u.status, linked: Boolean(u.entraObjectId), lastSignInAt: u.lastSignInAt || null });
 
+// Personal Microsoft accounts sign in through this fixed consumer tenant, or appear as guests whose home
+// identity provider is live.com.
+const CONSUMER_TENANT = '9188040d-6c67-4c5b-b112-36a304b66dad';
+const isPersonalAccount = claims => /(^|\/\/)live\.com\b/i.test(String(claims.idp || '')) || String(claims.idp || '').includes(CONSUMER_TENANT);
+// The only role ever given automatically (tenant-members policy). It is a constant, never read from a claim.
+const AUTO_ADMIT_ROLE = 'Requestor';
+
 // Guests (B2B) carry an `idp` claim naming their home identity provider, or `acct` = 1 when that optional claim is enabled.
 function isGuest(claims, tenantId) {
   if (claims.acct === 1 || claims.acct === '1') return true;
@@ -31,14 +38,22 @@ function createStore(db, { now = () => new Date() } = {}) {
   const record = (type, { actorId = null, subjectId = null, ...details } = {}) => events.insertOne({ type, at: now(), actorId, subjectId, ...details });
 
   // Decides whether a verified Microsoft sign-in may use the app. Returns { user } or { denied: reason }.
-  async function admit(claims, tenantId) {
+  // accessPolicy 'invite-only': only invited people. 'tenant-members': members of the configured tenant
+  // without an account are added as Requestor. Roles are never taken from sign-in claims in either policy.
+  async function admit(claims, tenantId, { accessPolicy = 'invite-only' } = {}) {
     const deny = async (reason, extra = {}) => { await record('signin.denied', { reason, entraObjectId: claims.oid || null, ...extra }); return { denied: reason }; };
+    if (String(claims.tid || '').toLowerCase() === CONSUMER_TENANT) return deny('personal-account');
     if (String(claims.tid || '').toLowerCase() !== tenantId) return deny('wrong-tenant');
     if (!claims.oid) return deny('missing-identity');
-    if (isGuest(claims, tenantId)) return deny('guest');
+    if (isGuest(claims, tenantId)) return deny(isPersonalAccount(claims) ? 'personal-account' : 'guest');
 
     let user = await users.findOne({ tenantId, entraObjectId: claims.oid });
     const email = normalizeEmail(claims.email || claims.preferred_username);
+    if (!user && accessPolicy === 'tenant-members') {
+      const result = await admitMember(claims, tenantId, email);
+      if (result.denied) return deny(result.denied, { email: email || null });
+      user = result.user;
+    }
     if (!user && EMAIL.test(email)) {
       // First sign-in of an invited person: bind the invitation to the permanent Entra object ID, once.
       const at = now();
@@ -58,6 +73,33 @@ function createStore(db, { now = () => new Date() } = {}) {
     await users.updateOne({ _id: user._id }, { $set: { lastSignInAt: at, displayName: claims.name || user.displayName, updatedAt: at } });
     await record('signin.success', { subjectId: user._id });
     return { user: { ...user, displayName: claims.name || user.displayName } };
+  }
+
+  // Tenant-members policy, for a verified member with no account linked to their object ID yet.
+  // An existing invitation for their email is honoured with its invited role. Otherwise a new account is
+  // created as Requestor (always: no claim can choose the role). A disabled or conflicting record with the
+  // same email is never bypassed.
+  async function admitMember(claims, tenantId, email) {
+    if (!EMAIL.test(email)) return { denied: 'missing-identity' };
+    const existing = await users.findOne({ email });
+    if (existing) {
+      if (existing.status === 'disabled') return { denied: 'disabled' };
+      if (existing.entraObjectId) return { denied: 'account-conflict' }; // same email, different Microsoft account
+      return { user: null }; // an invitation: bound below exactly as in invite-only mode
+    }
+    const at = now();
+    const doc = { email, role: AUTO_ADMIT_ROLE, status: 'active', displayName: claims.name || email, tenantId, entraObjectId: claims.oid, invitedBy: null, autoAdmitted: true, createdAt: at, updatedAt: at, activatedAt: at, lastSignInAt: null };
+    try {
+      const { insertedId } = await users.insertOne(doc);
+      doc._id = insertedId;
+    } catch (err) {
+      if (err.code !== 11000) throw err;
+      // A simultaneous first sign-in created it a moment ago: use that record if it is this account.
+      const raced = await users.findOne({ tenantId, entraObjectId: claims.oid });
+      return raced ? { user: raced } : { denied: 'account-conflict' };
+    }
+    await record('user.auto-admitted', { subjectId: doc._id, email, role: AUTO_ADMIT_ROLE });
+    return { user: doc };
   }
 
   // A new random session per sign-in. Only its SHA-256 hash is stored.
@@ -128,4 +170,4 @@ function createStore(db, { now = () => new Date() } = {}) {
   return { admit, createSession, getSession, deleteSession, listUsers, inviteUser, updateUser, publicUser, record };
 }
 
-module.exports = { ABSOLUTE_MS, IDLE_MS, StoreError, createStore, isGuest };
+module.exports = { ABSOLUTE_MS, AUTO_ADMIT_ROLE, CONSUMER_TENANT, IDLE_MS, StoreError, createStore, isGuest };
