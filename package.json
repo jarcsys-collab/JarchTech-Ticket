@@ -23,5 +23,10 @@
   },
   "devDependencies": {
     "mongodb-memory-server": "^11.3.0"
+  },
+  "config": {
+    "mongodbMemoryServer": {
+      "disablePostinstall": "1"
+    }
   }
 }

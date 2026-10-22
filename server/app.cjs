@@ -17,31 +17,54 @@ function sendJson(req, res, status, body) {
 // /healthz: the process is up and answering. /readyz: it can serve traffic, which requires the database and,
 // with sign-in enabled, the collections created by `npm run db:setup` (checked read-only).
 // Responses never include error details; those go to the server log, redacted.
-function createHealth({ database, requireSchema, isShuttingDown, log }) {
+// The database check is shared by concurrent requests and cached (5 s when ready, 1 s when not, so a fix shows up
+// quickly), so the public endpoint causes at most one ping and schema check per interval however often it is called.
+const READY_CACHE_MS = 5000;
+const NOT_READY_CACHE_MS = 1000;
+
+function createHealth({ database, requireSchema, isShuttingDown, log, now = Date.now }) {
   let lastState = null;
+  let cached = null; // { at, result } of the last completed check
+  let inFlight = null;
   const note = (state, message) => {
     if (state === lastState) return;
     lastState = state;
     if (state === 'ready') log.log(message); else log.error(message);
   };
-  return async function health(req, res, pathname) {
-    if (pathname === '/healthz') return sendJson(req, res, 200, { status: 'ok' });
-    if (isShuttingDown()) return sendJson(req, res, 503, { status: 'not-ready', database: 'stopping' });
-    if (!database || !database.configured) return sendJson(req, res, 503, { status: 'not-ready', database: 'not-configured' });
-    const result = await database.ping();
-    if (!result.ok) {
-      note(result.reason, `Readiness: database ${result.reason}.${result.error ? ' ' + result.error : ''}`);
-      return sendJson(req, res, 503, { status: 'not-ready', database: result.reason });
+
+  async function check() {
+    const ping = await database.ping();
+    if (!ping.ok) {
+      note(ping.reason, `Readiness: database ${ping.reason}.${ping.error ? ' ' + ping.error : ''}`);
+      return { ready: false, database: ping.reason };
     }
     if (requireSchema) {
       const missing = await database.missingSchema();
       if (missing.length) {
         note('schema-missing', `Readiness: sign-in collections or indexes are missing (${missing.join(', ')}). Run npm run db:setup.`);
-        return sendJson(req, res, 503, { status: 'not-ready', database: 'schema-missing' });
+        return { ready: false, database: 'schema-missing' };
       }
     }
     note('ready', 'Readiness: database reachable.');
-    return sendJson(req, res, 200, { status: 'ready', database: 'connected' });
+    return { ready: true, database: 'connected' };
+  }
+
+  function readiness() {
+    if (cached && now() - cached.at < (cached.result.ready ? READY_CACHE_MS : NOT_READY_CACHE_MS)) return Promise.resolve(cached.result);
+    inFlight ??= check()
+      .catch(err => { log.error(`Readiness check failed: ${database.redact(`${err.name}: ${err.message}`)}`); return { ready: false, database: 'unreachable' }; })
+      .then(result => { cached = { at: now(), result }; inFlight = null; return result; });
+    return inFlight;
+  }
+
+  return async function health(req, res, pathname) {
+    if (pathname === '/healthz') return sendJson(req, res, 200, { status: 'ok' });
+    if (isShuttingDown()) return sendJson(req, res, 503, { status: 'not-ready', database: 'stopping' });
+    if (!database || !database.configured) return sendJson(req, res, 503, { status: 'not-ready', database: 'not-configured' });
+    const result = await readiness();
+    return result.ready
+      ? sendJson(req, res, 200, { status: 'ready', database: 'connected' })
+      : sendJson(req, res, 503, { status: 'not-ready', database: result.database });
   };
 }
 
@@ -62,8 +85,9 @@ async function serveStatic(req, res, pathname, user, accessPolicy) {
 }
 
 // `auth` is null in demo mode, which serves the prototype exactly as before.
-function createServer({ database = null, auth = null, isShuttingDown = () => false, log = console } = {}) {
-  const health = createHealth({ database, requireSchema: Boolean(auth), isShuttingDown, log });
+// `now` is for tests of the readiness cache.
+function createServer({ database = null, auth = null, isShuttingDown = () => false, log = console, now } = {}) {
+  const health = createHealth({ database, requireSchema: Boolean(auth), isShuttingDown, log, now });
   return http.createServer(async (req, res) => {
     const pathname = (req.url || '/').split('?')[0];
     if (auth && await auth.handle(req, res, pathname)) return;

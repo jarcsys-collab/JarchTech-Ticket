@@ -154,6 +154,42 @@ npm.cmd run admin:bootstrap -- --email <first-admin-work-email> --confirm-db jar
 
 Then start with `npm.cmd start` and open http://localhost:4177. You'll see the sign-in page.
 
+## Railway staging
+
+Railway builds from GitHub (`jarcsys-collab/JarchTech-Ticket`, `main`) using `railway.json`:
+
+| Setting | Value |
+| --- | --- |
+| Start command | `npm start` |
+| Deploy health check | `/readyz`. Ready only when MongoDB answers and the sign-in collections exist. |
+| Restart policy | On failure |
+| Binding | `0.0.0.0` on the `PORT` Railway provides (detected from Railway's own variables) |
+
+**What the server does on Railway:**
+- It runs with production rules: it **refuses to start without complete Microsoft Entra settings** and never runs in demo mode.
+- It never reads a `.env` file there, since `.env` is not in Git. Every setting is a Railway variable.
+- It only serves files from `public/`. Requests for `.env`, server code, dependencies, docs, or `.git` are refused, and tests check this.
+- The `mongodb-memory-server` test binary download is switched off in `package.json`, so Railway builds don't fetch it.
+
+**Railway variables (enter the values in Railway yourself; never paste them in chat or commit them):**
+
+| Variable | Staging value |
+| --- | --- |
+| `NODE_ENV` | `production` |
+| `AUTH_MODE` | `entra` |
+| `ACCESS_POLICY` | `tenant-members` (beta) |
+| `APP_BASE_URL` | `https://<railway-domain>`, exactly as Railway shows it, with no trailing slash |
+| `MONGODB_URI` | The connection string for a **staging-only** Atlas user restricted to the staging database |
+| `MONGODB_DB_NAME` | The agreed staging database name |
+| `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | From the Entra registration used for staging |
+| `SESSION_SECRET` | A **new** random value for staging. Don't reuse the local one. |
+
+Don't set `PORT` or `HOST` in Railway; Railway provides `PORT`. Don't copy the local `.env` into Railway.
+
+**Order matters:** `/readyz` stays not-ready until `npm run db:setup` has prepared the staging database, so run the approved `db:setup` for that database **before** the first deploy. Otherwise the health check fails and Railway keeps the deploy from going live. The Entra registration also needs the matching Web callback, `https://<railway-domain>/auth/callback`.
+
+**Limitation:** hosting on Railway does **not** make tickets shared. Tickets are still stored in each browser until the ticket API exists.
+
 ## Checks
 
 ```powershell

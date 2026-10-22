@@ -173,3 +173,46 @@ test('process refuses to start in production without valid sign-in settings, and
   assert.match(partial.output(), /ENTRA_CLIENT_ID is required/); assert.match(partial.output(), /SESSION_SECRET is required/);
   for (const run of [noAuth, partial]) assert.ok(!/http:\/\/localhost:|Sign-in: none/.test(run.output()), 'must not start listening or start in demo mode: ' + run.output());
 });
+
+test('readiness checks are cached and shared, so /readyz cannot flood the database', async () => {
+  let pings = 0, clock = 0, healthy = true;
+  const database = { configured: true, redact: s => s, ping: async () => { pings++; await new Promise(r => setTimeout(r, 20)); return healthy ? { ok: true } : { ok: false, reason: 'unreachable' }; } };
+  const server = createServer({ database, log: { log() {}, error() {} }, now: () => clock });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    const burst = await Promise.all(Array.from({ length: 25 }, () => request(port, '/readyz')));
+    assert.ok(burst.every(r => r.status === 200)); assert.equal(pings, 1, '25 concurrent requests share one check');
+    clock = 4999; await request(port, '/readyz'); assert.equal(pings, 1, 'a ready result is reused for 5 seconds');
+    clock = 5000; await request(port, '/readyz'); assert.equal(pings, 2);
+    healthy = false; clock = 10000;
+    assert.equal((await request(port, '/readyz')).status, 503); assert.equal(pings, 3);
+    clock = 10999; assert.equal((await request(port, '/readyz')).status, 503); assert.equal(pings, 3, 'a not-ready result is reused for 1 second');
+    healthy = true; clock = 11000;
+    assert.equal((await request(port, '/readyz')).status, 200, 'recovery shows up after 1 second'); assert.equal(pings, 4);
+    for (let i = 0; i < 10; i++) await request(port, '/healthz');
+    assert.equal(pings, 4, '/healthz never touches the database');
+  } finally { await new Promise(r => server.close(r)); }
+});
+
+test('static serving never exposes .env, server code, dependencies, or docs, in demo or signed-in mode', async () => {
+  const server = createServer({ log: { log() {}, error() {} } });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    for (const p of ['/.env', '/.env.example', '/../.env', '/%2e%2e/.env', '/%2e%2e%2f.env', '/..%5c.env', '/%2e%2e%5c.env', '/server.cjs', '/server/config.cjs', '/%2e%2e/server/config.cjs', '/%2e%2e/server.cjs', '/package.json', '/%2e%2e/package.json', '/node_modules/mongodb/package.json', '/%2e%2e/node_modules/mongodb/package.json', '/docs/reference/annotated-review.pdf', '/%2e%2e/docs/ARCHITECTURE.md', '/railway.json', '/%2e%2e/railway.json', '/.git/config', '/%2e%2e/.git/config', '/%00.env']) {
+      const res = await request(port, p);
+      assert.ok([400, 403, 404].includes(res.status), `${p} -> ${res.status}`);
+      assert.doesNotMatch(res.body, /MONGODB_URI|ENTRA_CLIENT_SECRET|require\(|"dependencies"|\[core\]/, p);
+    }
+    assert.equal((await request(port, '/index.html')).status, 200);
+  } finally { await new Promise(r => server.close(r)); }
+});
+
+test('on Railway the server binds 0.0.0.0 on the PORT Railway provides', () => {
+  const railway = loadConfig({
+    RAILWAY_ENVIRONMENT_NAME: 'staging', PORT: '8080', MONGODB_URI: 'mongodb://h/', MONGODB_DB_NAME: 'jarctech_ticket_staging', AUTH_MODE: 'entra',
+    ENTRA_TENANT_ID: '11111111-2222-4333-8444-555555555555', ENTRA_CLIENT_ID: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', ENTRA_CLIENT_SECRET: 'fake-secret-value', SESSION_SECRET: 'fake-session-secret-0123456789abcdefghij', APP_BASE_URL: 'https://jarctech-staging.up.railway.app'
+  });
+  assert.equal(railway.host, '0.0.0.0'); assert.equal(railway.port, 8080); assert.equal(railway.deployed, true); assert.equal(railway.auth.secureCookies, true);
+});
