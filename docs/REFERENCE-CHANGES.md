@@ -19,7 +19,7 @@ Source: `reference/annotated-review.pdf`, supplied by the owner on 21 October 20
 
 - Pages 14-17 cross out standalone or repeated meeting screens, while page 11 explicitly requests planning meetings. Accordingly, standalone meeting navigation was removed, but meetings remain in the ticket workflow. This can be revised if the owner intends to remove meeting confirmation entirely.
 - Crossed role buttons indicate separate role workspaces. The prototype retains a clearly labeled demo selector for verification. Real sign-in and roles are the next development phase.
-- The PDF does not supply a request type/category taxonomy, production backend, authentication provider, or hosting target. These remain decisions for the owner.
+- The PDF does not supply a request type/category taxonomy, production backend, authentication provider, or hosting target. These remain decisions for the owner. Update 2026-10-22: the owner chose GitHub, Railway, and MongoDB (see `docs/ARCHITECTURE.md`). The authentication method and category taxonomy are still open.
 
 ## New validation
 

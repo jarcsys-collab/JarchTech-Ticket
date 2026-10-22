@@ -12,7 +12,7 @@ A working local prototype for JARC Technologies ticket intake, admin assignment,
 npm start
 ```
 
-Open **http://localhost:4175**. There are no third-party packages to install for this version.
+Open **http://localhost:4175**. The browser prototype itself needs no packages. Run `npm.cmd install` once before the checks and tests, which use the MongoDB driver and a temporary test database.
 If PowerShell blocks `npm.ps1`, use `npm.cmd start`.
 If another app already uses that port:
 
@@ -33,22 +33,40 @@ Use the URL printed in your terminal. Stop the server with Ctrl+C.
 - Two-step project creation: project name, agreed requirements, criteria, target, then dated tasks.
 - Projects list opens a Gantt chart with task dates, owner, requirement, task criteria, and completion.
 - Linked scope changes remain inside each ticket and retain assessment, agreement, approval, testing, acceptance, release, and closure.
-- Browser-local persistence, sample data, syntax checks, date tests, static server tests, and a GitHub Actions check.
+- Browser-local persistence, sample data, syntax checks, date tests, static server tests, backend foundation tests, and a GitHub Actions check.
 
 The header's **Demo role** selector replaces the old three-button preview strip. It is a preview aid, not sign-in or access control. Requestor demo identity: Adriane Venzon. Developer demo identity: Miguel Santos.
 
 ## Continue with Claude Code and GitHub
 
-Read [the Windows setup guide](docs/GETTING-STARTED.md), then [the phased build plan](docs/BUILD-PLAN.md). Claude Code reads the repository's [CLAUDE.md](CLAUDE.md) for context.
+Read [the Windows setup guide](docs/GETTING-STARTED.md), then [the phased build plan](docs/BUILD-PLAN.md). Claude Code reads the repository's [CLAUDE.md](CLAUDE.md) for context. The chosen architecture (GitHub, Railway, MongoDB) is recorded in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and the backend plan is in [docs/BACKEND-PLAN.md](docs/BACKEND-PLAN.md). The app itself is still the browser-only prototype until that plan is implemented.
 
 **Extract the ZIP before adding code to GitHub. Upload or commit its contents, not the ZIP itself.** The repository root should contain `package.json`, `server.cjs`, `CLAUDE.md`, `public/`, and `docs/`.
+
+## Backend foundation (not used by the UI yet)
+
+The server can connect to MongoDB and report its health, but **the UI still stores records only in the browser**. No ticket API exists yet, and nothing is read from or written to the database except a connection check (`ping`).
+
+- **Without database settings:** `npm start` runs exactly as the browser-only prototype.
+- **With database settings:** set `MONGODB_URI` and `MONGODB_DB_NAME` in a local `.env` (copy [`.env.example`](.env.example)) or as Railway variables, and the server checks the connection at start-up. Point local development at a development database, never production.
+- **Endpoints:**
+  - `GET /healthz` returns `200 {"status":"ok"}` while the process is running.
+  - `GET /readyz` returns `200 {"status":"ready","database":"connected"}` when MongoDB answers. Otherwise it returns `503` with `database` set to `not-configured`, `unreachable`, or `stopping`.
+  - Neither endpoint ever includes error details. Those go to the server log with credentials redacted.
+- **Settings are validated at start-up.** Every problem is listed by variable name, and values are never shown. In production or on Railway the database settings are required, and the server binds to `0.0.0.0` on Railway's `PORT`.
+- **Shutdown:** on `SIGTERM` or Ctrl+C the server stops accepting connections, lets in-flight requests finish (up to 8 seconds), closes the database connection, and exits.
+- **`.env` precedence:** settings already in the environment win over `.env`. Tests and the browser walkthrough never read `.env`; they set `NODE_ENV=test` or `JARCTECH_ENV_FILE=none`.
+- **Railway:** `railway.json` sets the start command and uses `/readyz` as the deploy health check. Nothing has been deployed.
 
 ## Checks
 
 ```powershell
+npm.cmd install
 npm.cmd run check
 npm.cmd test
 ```
+
+`npm test` includes backend tests against a temporary MongoDB started by `mongodb-memory-server` on `127.0.0.1`. It never uses `.env` or a shared database. The first run downloads the MongoDB test binary (about 80 MB) into `node_modules/.cache`. The `SIGTERM` shutdown test is skipped on Windows, because Windows cannot deliver that signal to a child process; it runs on Linux and macOS, including GitHub Actions.
 
 ### Optional browser walkthrough
 
@@ -93,10 +111,18 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `public/projects.js` | Dated project creation, task forms, Gantt views, project detail edits |
 | `public/timeline-core.js` | Validated UTC calendar dates and inclusive timeline calculations |
 | `public/style.css`, `public/projects.css` | Base JARC styling and project/Gantt layouts |
-| `server.cjs` | Local static file server; it has no ticket API or database |
+| `server.cjs` | Server entry point: loads settings (and an optional local `.env`), starts the server, and shuts down cleanly |
+| `server/app.cjs` | Static file serving for the prototype, plus `/healthz` and `/readyz`; no ticket API yet |
+| `server/config.cjs` | Environment variable validation and `.env` loading that never overrides existing settings |
+| `server/database.cjs` | MongoDB client for the configured database; currently used only for the readiness ping |
+| `server/redact.cjs` | Removes connection strings, usernames, and passwords from logged text |
+| `railway.json` | Railway start command, `/readyz` deploy health check, and restart policy |
 | `scripts/browser-walkthrough.mjs` | Optional headless-browser workflow and recovery check; not run in CI |
 | `scripts/walkthrough-failure-paths.mjs` | Optional Windows-only check of walkthrough startup failures, crash handling, and Ctrl+C cleanup; not run in CI |
 | `docs/REFERENCE-CHANGES.md` | Review annotations, implemented changes, interpretation, and open decisions |
+| `docs/ARCHITECTURE.md` | Architecture decision (GitHub, Railway, MongoDB), secrets handling, and pending owner details |
+| `docs/BACKEND-PLAN.md` | Backend implementation plan and the decisions it needs |
+| `.env.example` | Server settings with placeholders only; copy to the Git-ignored `.env` for local use |
 | `docs/reference/annotated-review.pdf` | User-supplied annotated visual reference, retained unchanged |
 
 ## Prototype boundaries
@@ -105,7 +131,7 @@ All records are in this browser's localStorage (`jarc-helpdesk-v1`), not on the 
 
 If the stored records cannot be read or are missing required fields, the app opens a recovery screen instead of loading sample data. The original value is left untouched, an exact copy is saved under a `jarc-helpdesk-v1-backup-<timestamp>` key when possible, and automatic saving is paused. You can download the stored value, try again, or explicitly reset to sample data; backups are kept after a reset. If a save fails (for example, storage is full), the app warns that recent changes exist only in the open tab.
 
-Real authentication, server-enforced permissions, a shared database, file uploads, and email/calendar delivery are future phases. Current UI role checks do not secure data. Do not use this as a production multi-user system until those phases are built.
+Real authentication, server-enforced permissions, shared data storage, file uploads, and email/calendar delivery are future phases. The server can check a MongoDB connection, but the UI does not use the database yet. Current UI role checks do not secure data. Do not use this as a production multi-user system until those phases are built.
 
 The current request form fields are intentionally retained. Category-specific forms await the owner's category definitions.
 

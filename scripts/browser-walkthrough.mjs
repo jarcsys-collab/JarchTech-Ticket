@@ -69,9 +69,17 @@ async function portProblem(port) {
 const tail = s => s.trim() ? '\n--- output ---\n' + s.trim().split(/\r?\n/).slice(-8).join('\n') : '';
 const running = child => child.pid && child.exitCode === null && child.signalCode === null;
 
+// The walkthrough's server is always the browser-only prototype on 127.0.0.1: it never reads a local .env
+// or inherits database or host settings, so it cannot connect to a real database.
+function serverEnv() {
+  const env = { ...process.env, PORT: String(PORT), NODE_ENV: 'test', JARCTECH_ENV_FILE: 'none' };
+  for (const name of ['MONGODB_URI', 'MONGODB_DB_NAME', 'HOST']) delete env[name];
+  return env;
+}
+
 function startServer() {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['server.cjs'], { cwd: REPO, env: { ...process.env, PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['server.cjs'], { cwd: REPO, env: serverEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
     owned.push(child);
     let out = '', ready = false;
     const timer = setTimeout(() => fail(`The walkthrough server did not report ready within ${SERVER_TIMEOUT / 1000} s.`), SERVER_TIMEOUT);

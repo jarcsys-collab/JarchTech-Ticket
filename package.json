@@ -3,13 +3,21 @@
   "version": "0.2.0",
   "private": true,
   "description": "JarcTech Ticket - local ticketing and project Gantt prototype",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node server.cjs",
     "dev": "node server.cjs",
-    "check": "node --check server.cjs && node --check public/app.js && node --check public/projects.js && node --check public/timeline-core.js && node --check public/ticket-core.js && node --check public/ui-common.js && node --check public/recovery-view.js && node --check scripts/browser-walkthrough.mjs && node --check scripts/walkthrough-failure-paths.mjs",
-    "test": "node --test tests/*.test.cjs",
+    "check": "node --check server.cjs && node --check server/app.cjs && node --check server/config.cjs && node --check server/database.cjs && node --check server/redact.cjs && node --check public/app.js && node --check public/projects.js && node --check public/timeline-core.js && node --check public/ticket-core.js && node --check public/ui-common.js && node --check public/recovery-view.js && node --check scripts/browser-walkthrough.mjs && node --check scripts/walkthrough-failure-paths.mjs",
+    "test": "node --test --test-timeout=60000 tests/*.test.cjs",
     "walkthrough": "node scripts/browser-walkthrough.mjs",
     "walkthrough:failures": "node scripts/walkthrough-failure-paths.mjs"
+  },
+  "dependencies": {
+    "mongodb": "^7.7.0"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^11.3.0"
   }
 }

@@ -12,6 +12,8 @@ Acceptance: same visible behavior, working data migration if schema changes, mea
 
 ## Phase 2 - Select the shared architecture
 
+Status: decided on 2026-10-22: GitHub, Railway, and MongoDB on the owner's existing accounts. See `docs/ARCHITECTURE.md` and the implementation plan in `docs/BACKEND-PLAN.md`. Also decided: MongoDB Atlas, and Microsoft Entra ID for sign-in. The Railway project and environment, and the staging and production databases, are still pending.
+
 Prompt:
 
 > Propose a shared database, authentication approach, and hosting plan suitable for our team. Ask how many users need access, whether company Microsoft/Google sign-in is required, and where the company permits hosting. Compare the simplest two options, including recurring costs and backups. Wait for my choice before adding external services.
