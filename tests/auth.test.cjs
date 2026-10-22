@@ -73,6 +73,7 @@ test('before db:setup the server is not ready; after it, ready', async () => {
   assert.equal(callback.status, 503);
   assert.deepEqual(await db.listCollections().toArray(), [], 'nothing created before db:setup');
   await ensureSchema(db);
+  await new Promise(r => setTimeout(r, 1100)); // a not-ready readiness result is cached for 1 second
   const ready = await call('/readyz');
   assert.equal(ready.status, 200); assert.deepEqual(ready.json, { status: 'ready', database: 'connected' });
 });
