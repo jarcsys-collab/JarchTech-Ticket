@@ -51,4 +51,6 @@ Intended behavior change: unreadable or structurally invalid stored data previou
 
 "Structurally valid" means `tickets`, `changes`, and `notices` arrays, with every ticket having a string `id`, `tasks`, and `history`, and every change a string `id` and `history`. Data created by the app always meets this.
 
+A stored value of exactly `null` (valid JSON, but not a records object) intentionally enters recovery mode as `invalid`. The earlier prototype replaced it with sample data. Only a missing record, where nothing is stored under the key, starts fresh sample data. This keeps one rule: anything stored that is not usable records is preserved and backed up, never silently replaced. Covered by the `JSON null` case in `tests/ticket-core.test.cjs`.
+
 Verified with `tests/ticket-core.test.cjs` (preservation, role filtering, progress, invalid data, failed backup, blocked saves, write failure, reset) and `npm run walkthrough`, an optional isolated headless-browser check of the full workflow plus recovery cases (see README).
