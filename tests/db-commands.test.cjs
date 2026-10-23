@@ -48,7 +48,7 @@ test('admin:bootstrap refuses before db:setup', async () => {
 test('db:setup creates the sign-in collections and indexes, idempotently, with no users', async () => {
   const first = await run('db-setup.cjs', ['--confirm-db', DB]);
   assert.equal(first.code, 0, first.out); assert.match(first.out, /collection created: users/); assert.match(first.out, /No users or records were created/);
-  assert.deepEqual(await collections(), ['events', 'sessions', 'users']);
+  assert.deepEqual(await collections(), ['beta_changes', 'beta_tickets', 'events', 'sessions', 'users']);
   const names = (await mongo.db(DB).collection('users').indexes()).map(i => i.name).sort();
   assert.deepEqual(names, ['_id_', 'email_unique', 'entra_identity_unique']);
   const sessionIndexes = await mongo.db(DB).collection('sessions').indexes();

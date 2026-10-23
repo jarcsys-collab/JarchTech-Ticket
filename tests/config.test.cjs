@@ -85,7 +85,7 @@ test('demo mode is local only and never a fallback for incomplete sign-in settin
 
 test('AUTH_MODE=entra requires complete, single-tenant settings and reports every problem without values', () => {
   const c = loadConfig(ENTRA);
-  assert.deepEqual({ ...c.auth }, { mode: 'entra', tenantId: ENTRA.ENTRA_TENANT_ID, clientId: ENTRA.ENTRA_CLIENT_ID, clientSecret: ENTRA.ENTRA_CLIENT_SECRET, baseUrl: 'http://localhost:4177', sessionSecret: ENTRA.SESSION_SECRET, secureCookies: false, accessPolicy: 'invite-only', inspection: false });
+  assert.deepEqual({ ...c.auth }, { mode: 'entra', tenantId: ENTRA.ENTRA_TENANT_ID, clientId: ENTRA.ENTRA_CLIENT_ID, clientSecret: ENTRA.ENTRA_CLIENT_SECRET, baseUrl: 'http://localhost:4177', sessionSecret: ENTRA.SESSION_SECRET, secureCookies: false, accessPolicy: 'invite-only', inspection: false, beta: false });
   const missing = problemsFor({ AUTH_MODE: 'entra' });
   for (const name of ['MONGODB_URI and MONGODB_DB_NAME', 'ENTRA_TENANT_ID', 'ENTRA_CLIENT_ID', 'ENTRA_CLIENT_SECRET', 'APP_BASE_URL', 'SESSION_SECRET']) assert.ok(missing.some(p => p.includes(name)), name);
   assert.match(problemsFor({ ...ENTRA, ENTRA_TENANT_ID: 'common' }).join(), /directory \(tenant\) ID, a GUID/);
@@ -126,4 +126,13 @@ test('INSPECTION_MODE is an explicit beta option: off by default, entra only, an
   assert.match(problemsFor({ ...ENTRA, INSPECTION_MODE: 'yes' }).join(), /INSPECTION_MODE must be enabled or disabled/);
   assert.match(problemsFor({ AUTH_MODE: 'demo', INSPECTION_MODE: 'enabled' }).join(), /INSPECTION_MODE applies only when AUTH_MODE=entra/);
   assert.match(problemsFor({ INSPECTION_MODE: 'enabled' }).join(), /AUTH_MODE is not set/);
+});
+
+test('BETA_SIMULATION is an explicit beta capability: off by default, entra only, and strictly validated', () => {
+  assert.equal(loadConfig(ENTRA).auth.beta, false, 'off unless enabled');
+  assert.equal(loadConfig({ ...ENTRA, BETA_SIMULATION: 'enabled' }).auth.beta, true);
+  assert.equal(loadConfig({ ...ENTRA, BETA_SIMULATION: 'disabled' }).auth.beta, false);
+  assert.match(problemsFor({ ...ENTRA, BETA_SIMULATION: 'on' }).join(), /BETA_SIMULATION must be enabled or disabled/);
+  assert.match(problemsFor({ AUTH_MODE: 'demo', BETA_SIMULATION: 'enabled' }).join(), /BETA_SIMULATION applies only when AUTH_MODE=entra/);
+  assert.match(problemsFor({ BETA_SIMULATION: 'enabled' }).join(), /AUTH_MODE is not set/);
 });

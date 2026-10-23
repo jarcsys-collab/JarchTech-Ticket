@@ -4,6 +4,7 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { injectSession } = require('./auth/index.cjs');
+const { BETA_COLLECTIONS, CORE_COLLECTIONS } = require('./schema.cjs');
 
 const ROOT = path.join(__dirname, '..', 'public');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml' };
@@ -38,10 +39,10 @@ function createHealth({ database, requireSchema, isShuttingDown, log, now = Date
       note(ping.reason, `Readiness: database ${ping.reason}.${ping.error ? ' ' + ping.error : ''}`);
       return { ready: false, database: ping.reason };
     }
-    if (requireSchema) {
-      const missing = await database.missingSchema();
+    if (requireSchema && requireSchema.length) {
+      const missing = await database.missingSchema(requireSchema);
       if (missing.length) {
-        note('schema-missing', `Readiness: sign-in collections or indexes are missing (${missing.join(', ')}). Run npm run db:setup.`);
+        note('schema-missing', `Readiness: required collections or indexes are missing (${missing.join(', ')}). Run npm run db:setup.`);
         return { ready: false, database: 'schema-missing' };
       }
     }
@@ -87,7 +88,9 @@ async function serveStatic(req, res, pathname, user, page) {
 // `auth` is null in demo mode, which serves the prototype exactly as before.
 // `now` is for tests of the readiness cache.
 function createServer({ database = null, auth = null, isShuttingDown = () => false, log = console, now } = {}) {
-  const health = createHealth({ database, requireSchema: Boolean(auth), isShuttingDown, log, now });
+  // Readiness requires the sign-in collections with Entra sign-in, plus the beta workspace collections when enabled.
+  const requireSchema = auth ? [...CORE_COLLECTIONS, ...(auth.beta ? BETA_COLLECTIONS : [])] : [];
+  const health = createHealth({ database, requireSchema, isShuttingDown, log, now });
   return http.createServer(async (req, res) => {
     const pathname = (req.url || '/').split('?')[0];
     if (auth && await auth.handle(req, res, pathname)) return;
