@@ -140,7 +140,7 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
   async function gate(req, res, pathname) {
     if (PUBLIC_ASSETS.has(pathname)) return { public: true };
     const user = await currentUser(req);
-    if (user) return { user, accessPolicy: auth.accessPolicy };
+    if (user) return { user, page: { accessPolicy: auth.accessPolicy, inspection: auth.inspection === true } };
     if (pathname === '/' || pathname.endsWith('.html')) redirect(res, '/auth/signin');
     else { res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); res.end('Sign in required'); }
     return null;
@@ -151,10 +151,12 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
 
 // Adds the signed-in user's display details to index.html. Values are JSON with < escaped, so they cannot end the script.
 // accessPolicy is display-only here (it explains who can sign in on the Users screen); the server enforces it.
-function injectSession(html, user, accessPolicy = 'invite-only') {
-  const data = JSON.stringify({ displayName: user.displayName || user.email, email: user.email, role: user.role, accessPolicy }).replace(/</g, '\\u003c');
+// With inspection enabled, inspection.js loads before the app so it can switch the app to isolated sample storage.
+function injectSession(html, user, { accessPolicy = 'invite-only', inspection = false } = {}) {
+  const data = JSON.stringify({ displayName: user.displayName || user.email, email: user.email, role: user.role, accessPolicy, inspection }).replace(/</g, '\\u003c');
+  const before = `<script>window.JARC_SESSION=Object.freeze(${data});</script>${inspection ? '<script src="inspection.js"></script>' : ''}`;
   return html
-    .replace('<script src="timeline-core.js"></script>', `<script>window.JARC_SESSION=Object.freeze(${data});</script><script src="timeline-core.js"></script>`)
+    .replace('<script src="timeline-core.js"></script>', `${before}<script src="timeline-core.js"></script>`)
     .replace('</body>', '<script src="auth-client.js"></script></body>');
 }
 

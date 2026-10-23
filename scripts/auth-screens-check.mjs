@@ -133,9 +133,12 @@ try {
     await shot('02-access-denied.png');
     check('denied sign-in left browser records untouched', await js(`localStorage.getItem('jarc-helpdesk-v1')`) === stored);
 
+    // A browser that remembers an inspection view must still get the normal app when INSPECTION_MODE is not enabled.
+    await js(`localStorage.setItem('jarc-inspection-view', 'Admin'); localStorage.setItem('jarc-inspection:jarc-helpdesk-v1', '{"tickets":[],"changes":[],"notices":[]}'); true`);
     entra.signInNext(account(2, 'Rita Requestor', 'rita@jarc.example'));
     await clickAndLoad('a.primary');
     check('invited Requestor lands in the app', await here() === '/' && await js(`!!document.querySelector('#app .stats')`));
+    check('with INSPECTION_MODE off, a remembered inspection view is ignored (no banner, no Preview views, normal records, real role)', await js(`typeof window.JARC_INSPECTION==='undefined' && !document.querySelector('#inspection-banner') && !document.querySelector('#preview-views') && !!document.querySelector('[data-id="JRC-7001"]') && document.querySelector('#page-title').textContent==='My ticket'`));
     check('demo role selector is hidden; header shows name, role, and Sign out', await js(`document.querySelector('.demo-role-label').hidden && document.querySelector('.signed-in-as').textContent==='Rita Requestor · Requestor' && !!document.querySelector('#sign-out') && !document.querySelector('#manage-users')`));
     check('role comes from the server (Requestor view)', await js(`document.querySelector('#page-title').textContent==='My ticket' && document.querySelector('.record-count').textContent==='Rita Requestor · My workspace'`));
     check('existing browser record is shown and unchanged', await js(`!!document.querySelector('[data-id="JRC-7001"]') && JSON.parse(localStorage.getItem('jarc-helpdesk-v1')).tickets[0].title==='Existing local record'`));

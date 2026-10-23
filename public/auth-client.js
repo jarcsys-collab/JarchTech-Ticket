@@ -12,13 +12,24 @@
     'cross-origin': 'The request was blocked because it did not come from JarcTech Ticket.'
   };
 
+  const inspection = window.JARC_INSPECTION || null; // present only when the server enables INSPECTION_MODE
+  const inspecting = Boolean(inspection && inspection.active);
+
   const style = document.createElement('style');
-  style.textContent = '.signed-in-as{font-size:11px;color:#6c7e80}.signout-form{margin:0}.users-table{min-width:0}.users-table td,.users-table th{font-size:11px}.users-table select{margin:0;padding:6px 8px;font-size:11px}.users-table .self{color:#8a9a9e}';
+  style.textContent = '.signed-in-as{font-size:11px;color:#6c7e80}.signout-form{margin:0}.users-table{min-width:0}.users-table td,.users-table th{font-size:11px}.users-table select{margin:0;padding:6px 8px;font-size:11px}.users-table .self{color:#8a9a9e}'
+    + '.inspection-banner{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;background:#fff3d9;border:1px solid #f0d48a;color:#7a5a12;border-radius:10px;padding:10px 14px;margin:12px 0 0;font-size:12px}.inspection-banner strong{font-size:13px}.inspection-banner span{flex:1;min-width:220px}.inspection-banner .actions{margin:0}.preview-choices{display:grid;gap:10px;margin-top:18px}.preview-choices button{text-align:left}';
   document.head.appendChild(style);
 
-  // The demo role selector is for demo mode only; here the role comes from the signed-in account.
+  // Outside inspection the role comes from the signed-in account, so the demo role selector is hidden.
+  // While inspecting, the same selector becomes the clearly labeled "Preview views" switch (local sample data only).
   const demoRole = document.querySelector('.demo-role-label');
-  if (demoRole) demoRole.hidden = true;
+  if (demoRole) {
+    demoRole.hidden = !inspecting;
+    if (inspecting) {
+      demoRole.firstChild.textContent = 'Preview views';
+      demoRole.querySelector('select').setAttribute('aria-label', 'Preview views (sample data)');
+    }
+  }
   const avatar = document.querySelector('.avatar');
   avatar.textContent = me.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?';
   avatar.title = `${me.displayName} (${me.email})`;
@@ -28,7 +39,17 @@
   who.className = 'signed-in-as';
   who.textContent = `${me.displayName} · ${me.role}`;
   right.insertBefore(who, avatar);
-  if (me.role === 'Admin') {
+  if (inspection && !inspecting) {
+    const preview = document.createElement('button');
+    preview.className = 'secondary';
+    preview.id = 'preview-views';
+    preview.textContent = 'Preview views';
+    preview.onclick = openPreviewChoices;
+    right.insertBefore(preview, who);
+  }
+  if (inspecting) showInspectionBanner();
+  // Real user management is never part of inspection, so it is only offered outside it (and only to real Admins).
+  if (me.role === 'Admin' && !inspecting) {
     const usersButton = document.createElement('button');
     usersButton.className = 'secondary';
     usersButton.id = 'manage-users';
@@ -41,7 +62,29 @@
   signOut.action = '/auth/logout';
   signOut.className = 'signout-form';
   signOut.innerHTML = '<button class="secondary" type="submit" id="sign-out">Sign out</button>';
+  signOut.addEventListener('submit', () => { if (inspection) inspection.forget(); }); // sample data stays; the next sign-in starts normally
   right.appendChild(signOut);
+
+  function openPreviewChoices() {
+    open(`<div class="tagline">BETA INSPECTION</div><h2>Preview views</h2>
+      <p>Try the Requestor, Admin, and Developer views on <strong>sample data</strong> kept only in this browser, separate from your normal records. Your account and real role (${esc(me.role)}) do not change, and nothing is sent to the server. Admin and Developer actions are simulated on the sample data only.</p>
+      <div class="preview-choices">${inspection.views.map(v => `<button class="secondary" data-preview="${v}">Preview as ${v}</button>`).join('')}</div>`);
+    document.querySelectorAll('[data-preview]').forEach(b => b.onclick = () => inspection.enter(b.dataset.preview));
+  }
+
+  function showInspectionBanner() {
+    const banner = document.createElement('div');
+    banner.className = 'inspection-banner';
+    banner.id = 'inspection-banner';
+    banner.setAttribute('role', 'status');
+    const describe = () => `Previewing the ${$('#demo-role').value} view with sample records stored only in this browser. Your account and real role (${me.role}) are unchanged, and nothing here is saved to the server.`;
+    banner.innerHTML = `<strong>Inspection mode — sample data</strong><span id="inspection-detail"></span><div class="actions"><button class="secondary" id="reset-sample">Reset sample data</button><button class="primary" id="exit-inspection">Exit inspection</button></div>`;
+    document.querySelector('main').insertBefore(banner, document.querySelector('main').firstChild);
+    $('#inspection-detail').textContent = describe();
+    $('#demo-role').addEventListener('change', e => { inspection.setView(e.target.value); $('#inspection-detail').textContent = describe(); });
+    $('#exit-inspection').onclick = () => inspection.exit();
+    $('#reset-sample').onclick = () => { if (confirm('Reset all inspection sample data in this browser? Your normal records are not affected.')) inspection.reset(); };
+  }
 
   async function api(method, url, body) {
     const res = await fetch(url, { method, credentials: 'same-origin', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });

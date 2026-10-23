@@ -68,7 +68,7 @@ function createHealth({ database, requireSchema, isShuttingDown, log, now = Date
   };
 }
 
-async function serveStatic(req, res, pathname, user, accessPolicy) {
+async function serveStatic(req, res, pathname, user, page) {
   let name;
   try { name = decodeURIComponent(pathname); }
   catch { res.writeHead(400); return res.end('Bad request'); }
@@ -79,7 +79,7 @@ async function serveStatic(req, res, pathname, user, accessPolicy) {
   try { bytes = await fs.readFile(file); }
   catch { res.writeHead(404); return res.end('Not found'); }
   const headers = { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
-  if (user && name === '/index.html') { bytes = injectSession(bytes.toString('utf8'), user, accessPolicy); headers['X-Frame-Options'] = 'DENY'; }
+  if (user && name === '/index.html') { bytes = injectSession(bytes.toString('utf8'), user, page); headers['X-Frame-Options'] = 'DENY'; }
   res.writeHead(200, headers);
   res.end(req.method === 'HEAD' ? undefined : bytes);
 }
@@ -96,7 +96,7 @@ function createServer({ database = null, auth = null, isShuttingDown = () => fal
     if (!auth) return serveStatic(req, res, pathname, null);
     try {
       const access = await auth.gate(req, res, pathname);
-      if (access) return serveStatic(req, res, pathname, access.user || null, access.accessPolicy);
+      if (access) return serveStatic(req, res, pathname, access.user || null, access.page);
     } catch (err) {
       log.error(`Request failed: ${database.redact(`${err.name}: ${err.message}`)}`);
       if (!res.headersSent) { res.writeHead(503, { 'Cache-Control': 'no-store' }); res.end('Service unavailable'); }
