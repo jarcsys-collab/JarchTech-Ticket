@@ -1,5 +1,6 @@
 // Collections, validators, and indexes for sign-in and the shared beta workspace. Created only by the explicit
 // `npm run db:setup` command; the running server never creates or changes them, it only checks (read-only) that they exist.
+const { isDeepStrictEqual } = require('node:util');
 const { statuses: TICKET_STATUSES } = require('../public/ticket-core.js');
 const { CHANGE_STATUSES } = require('../public/workflow-core.js');
 
@@ -113,10 +114,13 @@ const BETA_COLLECTIONS = ['beta_tickets', 'beta_changes'];
 
 // Idempotent: creates missing collections and indexes and refreshes validators. Returns a summary of actions.
 async function ensureSchema(db) {
-  const existing = new Set((await db.listCollections({}, { nameOnly: true }).toArray()).map(c => c.name));
+  // Full listing (not nameOnly) so an unchanged validator is left alone: collMod needs more than readWrite rights.
+  const existing = new Map((await db.listCollections({}).toArray()).map(c => [c.name, c.options || {}]));
   const actions = [];
   for (const [name, spec] of Object.entries(COLLECTIONS)) {
-    if (existing.has(name)) { await db.command({ collMod: name, validator: spec.validator, validationLevel: 'strict', validationAction: 'error' }); actions.push(`validator updated: ${name}`); }
+    const current = existing.get(name);
+    if (current && isDeepStrictEqual(current.validator, spec.validator) && current.validationLevel === 'strict' && current.validationAction === 'error') actions.push(`validator unchanged: ${name}`);
+    else if (current) { await db.command({ collMod: name, validator: spec.validator, validationLevel: 'strict', validationAction: 'error' }); actions.push(`validator updated: ${name}`); }
     else { await db.createCollection(name, { validator: spec.validator, validationLevel: 'strict', validationAction: 'error' }); actions.push(`collection created: ${name}`); }
     const names = new Set((await db.collection(name).indexes()).map(i => i.name));
     for (const { key, ...options } of spec.indexes) {

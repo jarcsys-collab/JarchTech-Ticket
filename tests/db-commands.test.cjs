@@ -54,7 +54,7 @@ test('db:setup creates the sign-in collections and indexes, idempotently, with n
   const sessionIndexes = await mongo.db(DB).collection('sessions').indexes();
   assert.equal(sessionIndexes.find(i => i.name === 'expires_ttl').expireAfterSeconds, 0);
   const again = await run('db-setup.cjs', ['--confirm-db', DB]);
-  assert.equal(again.code, 0); assert.doesNotMatch(again.out, /(collection|index) created/); assert.match(again.out, /validator updated: users/);
+  assert.equal(again.code, 0); assert.doesNotMatch(again.out, /(collection|index) created/); assert.match(again.out, /validator unchanged: users/); assert.doesNotMatch(again.out, /validator updated/);
   assert.equal(await mongo.db(DB).collection('users').countDocuments(), 0);
   await assert.rejects(mongo.db(DB).collection('users').insertOne({ email: 'x@jarc.example', role: 'Owner', status: 'active', createdAt: new Date(), updatedAt: new Date() }), /Document failed validation/);
 });
