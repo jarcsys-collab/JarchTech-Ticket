@@ -10,6 +10,11 @@ jobs:
           node-version: '22'
           cache: npm
       # Tests use a temporary MongoDB from mongodb-memory-server; no shared database or secrets are involved.
+      # Its binary is cached between runs and downloaded once by `npm test` before test files run in parallel.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongodb-binaries-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
       - run: npm run check
       - run: npm test
