@@ -8,19 +8,7 @@ $('#demo-role').onchange = e => {
 
 // Give only new sample data a dated example schedule. Existing records keep their dates.
 if (isNewDemo) {
-  state.tickets.filter(t => t.project).forEach(t => {
-    t.projectName = t.title;
-    t.requirements = t.notes || t.description;
-    const end = TL.day(t.date);
-    t.tasks.forEach((task, i) => {
-      task.start = TL.date(end - (t.tasks.length - i) * 3 * TL.DAY);
-      task.end = TL.date(end - (t.tasks.length - i - 1) * 3 * TL.DAY - TL.DAY);
-      task.requirement = task.title;
-      task.criteria = 'Demonstrate this task against the agreed project acceptance criteria.';
-      task.owner = t.dev;
-      task.scheduleSource = 'demo';
-    });
-  });
+  SampleData.dateSampleProjects(state, TL);
   save();
 }
 
@@ -56,9 +44,8 @@ detail = function (id) {
 function planningMeeting(t) {
   open(`<h2>Planning and requirements meeting</h2><p>Keep meeting details with the ticket. Confirm requirements and acceptance criteria before creating the project.</p><form id="planning-meeting"><div class="field-grid"><label>Date and time *<input name="meeting" type="datetime-local" required value="${esc(t.meeting || '')}"></label><label>Location *<input name="location" required value="${esc(t.location || 'JARC meeting room')}"></label></div><button class="primary">Send meeting proposal</button></form>`);
   $('#planning-meeting').onsubmit = e => {
-    e.preventDefault(); Object.assign(t, Object.fromEntries(new FormData(e.target)), { meetingConfirmed: false });
-    if (!t.project) t.status = 'Meeting scheduled';
-    note(t, 'Planning meeting updated; requestor confirmation requested.'); refresh(t.id);
+    e.preventDefault();
+    perform('ticket', t.id, 'edit-meeting', Object.fromEntries(new FormData(e.target)), () => refresh(t.id));
   };
 }
 
@@ -98,26 +85,13 @@ function projectTaskSetup(t, draft) {
   $('#back-scope').onclick = () => projectSetup(t, { ...draft, tasks: readTaskFields($('#task-fields')) });
   $('#project-tasks').onsubmit = e => {
     e.preventDefault(); const tasks = readTaskFields($('#task-fields'));
-    const error = validateProjectTasks(tasks, draft.date);
+    const error = WorkflowCore.validateProjectTasks(tasks, draft.date);
     if (error) return toast(error);
-    Object.assign(t, {
-      project: 'PRJ-' + t.id.split('-')[1], projectName: draft.projectName,
-      requirements: draft.requirements, notes: draft.requirements, criteria: draft.criteria,
-      date: draft.date, status: 'Planning', tasks: tasks.map(x => ({ ...x, done: false }))
-    });
-    note(t, 'Project created with agreed requirements, acceptance criteria, and a task timeline. Requestor added; admin notified.');
-    render(); projectView(t.id);
+    const scope = { projectName: draft.projectName, requirements: draft.requirements, criteria: draft.criteria, date: draft.date, tasks };
+    perform('ticket', t.id, 'create-project', scope, () => { render(); projectView(t.id); });
   };
 }
 function $$(selector) { return [...document.querySelectorAll(selector)]; }
-function validateProjectTasks(tasks, target) {
-  if (!tasks.length) return 'Add at least one task.';
-  for (const task of tasks) {
-    const err = TL.validateTask(task); if (err) return err;
-    if (task.end > target) return 'A task ends after the confirmed target date. Update the scope target or task dates.';
-  }
-  return '';
-}
 
 function projectView(id) {
   const t = state.tickets.find(x => x.id === id);
@@ -147,9 +121,7 @@ function editProjectTask(t, index, returnToGantt) {
     const error = TL.validateTask(next); if (error) return toast(error);
     if (next.end > t.date) return toast('Task ends after the project target. Update project details first.');
     next.done = e.target.elements.done.checked;
-    if (index === null) t.tasks.push(next); else t.tasks[index] = next;
-    note(t, `${index===null?'Added':'Updated'} dated task: ${next.title}.`);
-    render(); back();
+    perform('ticket', t.id, 'save-task', { index, task: next }, () => { render(); back(); });
   };
 }
 function editScope(t) {
@@ -157,7 +129,7 @@ function editScope(t) {
   $('#edit-project').onsubmit = e => {
     e.preventDefault(); const next = Object.fromEntries(new FormData(e.target));
     if (t.tasks.some(x => x.end && x.end > next.date)) return toast('Target date cannot precede a saved task end date.');
-    Object.assign(t, next); note(t, 'Project planning details updated.'); render(); projectView(t.id);
+    perform('ticket', t.id, 'edit-scope', next, () => { render(); projectView(t.id); });
   };
 }
 

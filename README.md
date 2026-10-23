@@ -217,6 +217,44 @@ npm.cmd run walkthrough
 $env:WALKTHROUGH_SCREENSHOTS = 'tmp'; npm.cmd run walkthrough
 ```
 
+### Shared beta simulation workspace (`BETA_SIMULATION=enabled`)
+
+An explicit beta capability for signed-in mode, off unless `BETA_SIMULATION=enabled`. Every signed-in beta member works in **one shared workspace labeled "Beta simulation — test data"**. Tickets, projects, dated tasks, comments, activity, and linked scope changes are **stored in MongoDB** (`beta_tickets`, `beta_changes`), so they survive refreshes, sign-out, and redeployments, and appear across browsers and devices.
+
+**Simulated views:**
+- **Switching:** the header's **Simulation view** switches freely between **Requestor**, **Admin**, and **Developer**, and the choice is remembered in the browser.
+- **Who each view acts as:** the Developer view acts as the sample developer **Miguel Santos**. Assignments use only the sample developers (Miguel Santos, Elyza Cruz, Paolo Reyes). No real developer accounts are needed.
+- **Requestor view:** shows the member's own requests plus the shared sample requests, and requestor actions apply only to those.
+
+**Server rules:**
+- **Every action is authorized on the server:** sign-in, the app's own origin, a valid view, and the workflow rules for that view and the record's current status (shared with the browser in `public/workflow-core.js`).
+- **Views never change real roles.** They only apply inside the beta collections. `/api/v1/me` still reports the real role, and real user management stays Admin-only.
+- **Activity history** records both the **signed-in actor** and the **simulated view** ("Member One (Admin view)").
+- **No silent overwrites:** every write carries the record version it was based on, and a stale one is refused with "changed in another session".
+- **No duplicates:** repeated submissions of the same request or change return the first result instead of creating a second record.
+
+**Saving and loading:**
+- **Status:** the header shows *Saving to shared beta…*, *Saved to shared beta*, or *Not saved*. A failed save is reported, the dialog and typed text stay for retrying, and nothing falls back to browser storage.
+- **Loading:** the records show a loading state, and an error state with **Try again**.
+- **Refreshing:** shared records refresh when you switch views or return to the tab.
+
+**Data management (explicit only; the server never seeds or resets on its own):**
+
+```powershell
+npm.cmd run db:setup -- --confirm-db <database>               # creates/updates collections, validation, and indexes (including beta_*)
+npm.cmd run beta:seed -- --confirm-db <database>              # adds the sample records; refuses if the workspace has records
+npm.cmd run beta:seed -- --confirm-db <database> --replace    # replaces only the beta workspace records with the samples
+```
+
+**Reset beta workspace** in the banner (type `RESET` to confirm) restores the sample records for everyone. It never touches accounts, sessions, browser-only records, or other collections, and it is recorded in the audit log. Browser-local tickets are **not** migrated.
+
+**Limitations:**
+- The beta workspace is test data, and any signed-in beta member can act in any view and reset it.
+- Real Admin and Developer roles and real ticket ownership are not yet used for tickets.
+- Email and calendar are not connected; notifications are in-app only.
+
+`npm.cmd run walkthrough:beta` checks all of this in a real headless browser with two separate browser contexts, a **mock** Entra provider, and a **temporary** MongoDB. Set `BETA_SCREENSHOTS` to save screenshots.
+
 ### Beta inspection mode (`INSPECTION_MODE=enabled`)
 
 An explicit beta option for signed-in mode, off unless `INSPECTION_MODE=enabled`. It lets anyone signed in try every role's workflow without changing real roles.
@@ -296,6 +334,11 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `server/auth/pages.cjs`, `server/auth/tokens.cjs` | Sign-in, access-denied, signed-out, and error pages; random tokens and the encrypted sign-in flow cookie |
 | `public/auth-client.js` | Signed-in mode only: header name and role, Sign out, the Admin Users screen, and the inspection controls and banner |
 | `public/inspection.js` | Beta inspection mode (sent only when `INSPECTION_MODE=enabled`): preview view, isolated sample-data storage, exit, and reset |
+| `public/workflow-core.js` | Ticket, project, and linked-change workflow rules (view and status checks), shared by the browser and the server |
+| `public/sample-data.js` | Sample records (local demo, inspection, and the beta workspace seed) and their illustrative dated schedule |
+| `public/beta-store.js` | Shared beta workspace client (sent only when `BETA_SIMULATION=enabled`): loading, saving, conflicts, failed saves, refresh, and reset |
+| `server/beta/index.cjs` | Shared beta workspace API (`/api/v1/beta/*`): versioned writes, repeated-submission protection, actor and view in activity, seed, and reset |
+| `scripts/beta-seed.cjs`, `scripts/beta-walkthrough.mjs` | Explicit beta seed command (`npm run beta:seed`) and the beta real-browser walkthrough (`npm run walkthrough:beta`) |
 | `scripts/inspection-walkthrough.mjs` | Optional per-flow browser walkthrough of every workflow in inspection mode (`npm run walkthrough:inspection`) |
 | `scripts/db-setup.cjs`, `scripts/admin-bootstrap.cjs`, `scripts/db-command.cjs` | The one-time database commands described above, and their shared confirmation and redaction handling |
 | `scripts/auth-screens-check.mjs` | Optional signed-in screen check with a mock Entra provider and a temporary database (`npm run walkthrough:auth`) |

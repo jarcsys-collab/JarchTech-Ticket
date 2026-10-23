@@ -41,7 +41,7 @@ function createDatabase(config) {
       }
     },
     // Read-only check that the sign-in collections and indexes exist (created by npm run db:setup).
-    missingSchema: () => missingSchema(client.db(config.name)),
+    missingSchema: names => missingSchema(client.db(config.name), names),
     async close() {
       if (closed) return;
       closed = true;

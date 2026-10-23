@@ -13,6 +13,13 @@ Status: **implemented on `feature/entra-auth`** and tested with a mock Entra pro
 
 **Still open:** the first Admin's work email (asked when real configuration starts); production app registration and credential type.
 
+## Shared beta simulation workspace (`BETA_SIMULATION=enabled`)
+
+An explicit, server-controlled beta capability, separate from account roles: signed-in members switch freely between simulated Requestor, Admin, and Developer views in one shared, MongoDB-stored test workspace.
+- **Authorization:** every `/api/v1/beta/*` request requires a session and the app's origin. The server checks the view and the workflow rules for each action.
+- **Scope of views:** a view only affects the `beta_tickets` and `beta_changes` collections. It never changes the session, the stored role, `/api/v1/me`, or any other API.
+- **Off by default:** `BETA_SIMULATION` is `disabled` unless set, and it is rejected in demo mode. See README for the details and limitations.
+
 ## Beta inspection mode (`INSPECTION_MODE=enabled`)
 
 An explicit, separately switchable beta option. Signed-in people can preview the Requestor, Admin, and Developer views on **sample data in their own browser**, under the storage prefix `jarc-inspection:`.

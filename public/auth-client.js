@@ -14,21 +14,33 @@
 
   const inspection = window.JARC_INSPECTION || null; // present only when the server enables INSPECTION_MODE
   const inspecting = Boolean(inspection && inspection.active);
+  // The shared beta workspace (BETA_SIMULATION=enabled) is the main view unless local inspection is active.
+  const sharedBeta = Boolean(window.JARC_BETA) && !inspecting;
 
   const style = document.createElement('style');
   style.textContent = '.signed-in-as{font-size:11px;color:#6c7e80}.signout-form{margin:0}.users-table{min-width:0}.users-table td,.users-table th{font-size:11px}.users-table select{margin:0;padding:6px 8px;font-size:11px}.users-table .self{color:#8a9a9e}'
-    + '.inspection-banner{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;background:#fff3d9;border:1px solid #f0d48a;color:#7a5a12;border-radius:10px;padding:10px 14px;margin:12px 0 0;font-size:12px}.inspection-banner strong{font-size:13px}.inspection-banner span{flex:1;min-width:220px}.inspection-banner .actions{margin:0}.preview-choices{display:grid;gap:10px;margin-top:18px}.preview-choices button{text-align:left}';
+    + '.inspection-banner{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;background:#fff3d9;border:1px solid #f0d48a;color:#7a5a12;border-radius:10px;padding:10px 14px;margin:12px 0 0;font-size:12px}.inspection-banner strong{font-size:13px}.inspection-banner span{flex:1;min-width:220px}.inspection-banner .actions{margin:0}.preview-choices{display:grid;gap:10px;margin-top:18px}.preview-choices button{text-align:left}'
+    + '.beta-banner{background:#e3f6f5;border-color:#9fd9d6;color:#0b5c60}.save[data-state=saving] i{background:#e0a526}.save[data-state=error]{color:#c0574d}.save[data-state=error] i{background:#d9685d}';
   document.head.appendChild(style);
 
   // Outside inspection the role comes from the signed-in account, so the demo role selector is hidden.
   // While inspecting, the same selector becomes the clearly labeled "Preview views" switch (local sample data only).
   const demoRole = document.querySelector('.demo-role-label');
+  // In the shared beta workspace it becomes the "Simulation view" switch (shared test data; real roles unchanged).
   if (demoRole) {
-    demoRole.hidden = !inspecting;
+    demoRole.hidden = !(inspecting || sharedBeta);
     if (inspecting) {
       demoRole.firstChild.textContent = 'Preview views';
       demoRole.querySelector('select').setAttribute('aria-label', 'Preview views (sample data)');
+    } else if (sharedBeta) {
+      demoRole.firstChild.textContent = 'Simulation view';
+      demoRole.querySelector('select').setAttribute('aria-label', 'Simulation view (shared beta test data)');
     }
+  }
+  if (sharedBeta) {
+    const bottom = document.querySelector('.sidebar-bottom');
+    bottom.childNodes[1].textContent = ' Shared beta workspace';
+    bottom.querySelector('small').textContent = 'Test data saved on the server';
   }
   const avatar = document.querySelector('.avatar');
   avatar.textContent = me.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?';
@@ -48,6 +60,7 @@
     right.insertBefore(preview, who);
   }
   if (inspecting) showInspectionBanner();
+  if (sharedBeta) showBetaBanner();
   // Real user management is never part of inspection, so it is only offered outside it (and only to real Admins).
   if (me.role === 'Admin' && !inspecting) {
     const usersButton = document.createElement('button');
@@ -67,9 +80,33 @@
 
   function openPreviewChoices() {
     open(`<div class="tagline">BETA INSPECTION</div><h2>Preview views</h2>
-      <p>Try the Requestor, Admin, and Developer views on <strong>sample data</strong> kept only in this browser, separate from your normal records. Your account and real role (${esc(me.role)}) do not change, and nothing is sent to the server. Admin and Developer actions are simulated on the sample data only.</p>
+      <p>Try the Requestor, Admin, and Developer views on <strong>local sample data</strong> kept only in this browser, separate from your normal records${window.JARC_BETA ? ' and from the shared beta workspace' : ''}. Your account and real role (${esc(me.role)}) do not change, and nothing is sent to the server. Admin and Developer actions are simulated on the sample data only.</p>
       <div class="preview-choices">${inspection.views.map(v => `<button class="secondary" data-preview="${v}">Preview as ${v}</button>`).join('')}</div>`);
     document.querySelectorAll('[data-preview]').forEach(b => b.onclick = () => inspection.enter(b.dataset.preview));
+  }
+
+  function showBetaBanner() {
+    const banner = document.createElement('div');
+    banner.className = 'inspection-banner beta-banner';
+    banner.id = 'beta-banner';
+    banner.setAttribute('role', 'status');
+    banner.innerHTML = `<strong>Beta simulation — test data</strong><span id="beta-detail"></span><div class="actions"><button class="secondary" id="reset-beta">Reset beta workspace</button></div>`;
+    document.querySelector('main').insertBefore(banner, document.querySelector('main').firstChild);
+    // The current view comes from the beta client (the selector only shows it once the shared records have loaded).
+    const describe = v => `Shared test records saved on the server for everyone in the beta. You are simulating the ${v} view${v === 'Developer' ? ' as sample developer Miguel Santos' : ''}; your account and real role (${me.role}) do not change. Email and calendar are not connected.`;
+    $('#beta-detail').textContent = describe(window.JARC_BETA.view);
+    $('#demo-role').addEventListener('change', e => { $('#beta-detail').textContent = describe(e.target.value); });
+    $('#reset-beta').onclick = () => {
+      open(`<div class="tagline">BETA SIMULATION</div><h2>Reset the shared beta workspace</h2>
+        <p>This replaces <strong>every shared beta test record</strong> (tickets, projects, tasks, comments, activity, and scope changes) with the original sample records, for everyone in the beta. It cannot be undone.</p>
+        <p>Accounts, sign-in sessions, browser-only records, and other databases are not affected.</p>
+        <form id="beta-reset-form"><label>Type RESET to confirm *<input name="confirm" autocomplete="off" required></label><div class="actions"><button class="secondary danger">Reset shared beta workspace</button></div></form>`);
+      $('#beta-reset-form').onsubmit = async e => {
+        e.preventDefault();
+        if (new FormData(e.target).get('confirm') !== 'RESET') return toast('Type RESET exactly to confirm.');
+        if (await window.JARC_BETA.reset()) { close(); toast('The shared beta workspace was reset to the sample records.'); }
+      };
+    };
   }
 
   function showInspectionBanner() {

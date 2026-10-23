@@ -6,6 +6,7 @@ const { createOidc } = require('./oidc.cjs');
 const { pages } = require('./pages.cjs');
 const { ABSOLUTE_MS, StoreError, createStore } = require('./store.cjs');
 const { seal, unseal } = require('./tokens.cjs');
+const { createBeta } = require('../beta/index.cjs');
 
 const FLOW_MS = 10 * 60 * 1000;
 const FLOW_PURPOSE = 'jarctech-auth-flow';
@@ -14,6 +15,8 @@ const USER_PATH = /^\/api\/v1\/users\/([0-9a-f]{24})$/;
 
 function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = {}) {
   const store = createStore(database.db(), { now });
+  // Shared beta simulation workspace, only when BETA_SIMULATION=enabled. Reset events go to the audit log.
+  const beta = auth.beta ? createBeta({ db: database.db(), log, now: now || (() => new Date()), recordEvent: (type, details) => store.record(type, details) }) : null;
   const oidc = createOidc(auth, oidcOptions);
   const secure = auth.secureCookies;
   const SESSION = secure ? '__Host-jt_session' : 'jt_session';
@@ -92,6 +95,11 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
     if (!user) return sendJson(req, res, 401, { error: 'sign-in-required' });
     const write = !['GET', 'HEAD'].includes(req.method);
     if (write && !sameOrigin(req, auth.baseUrl)) return sendJson(req, res, 403, { error: 'cross-origin' });
+    // The beta workspace: any signed-in member, simulated view per request, beta collections only.
+    if (pathname === '/api/v1/beta' || pathname.startsWith('/api/v1/beta/')) {
+      if (!beta) return sendJson(req, res, 404, { error: 'not-found' });
+      return beta.handle(req, res, pathname, user);
+    }
     if (pathname === '/api/v1/me') {
       if (write) return sendJson(req, res, 405, { error: 'method-not-allowed' }, { Allow: 'GET, HEAD' });
       return sendJson(req, res, 200, { mode: 'entra', user: store.publicUser(user) });
@@ -140,21 +148,21 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
   async function gate(req, res, pathname) {
     if (PUBLIC_ASSETS.has(pathname)) return { public: true };
     const user = await currentUser(req);
-    if (user) return { user, page: { accessPolicy: auth.accessPolicy, inspection: auth.inspection === true } };
+    if (user) return { user, page: { accessPolicy: auth.accessPolicy, inspection: auth.inspection === true, beta: auth.beta === true } };
     if (pathname === '/' || pathname.endsWith('.html')) redirect(res, '/auth/signin');
     else { res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); res.end('Sign in required'); }
     return null;
   }
 
-  return { handle, gate, store, cookieName: SESSION };
+  return { handle, gate, store, cookieName: SESSION, beta: Boolean(beta) };
 }
 
 // Adds the signed-in user's display details to index.html. Values are JSON with < escaped, so they cannot end the script.
 // accessPolicy is display-only here (it explains who can sign in on the Users screen); the server enforces it.
 // With inspection enabled, inspection.js loads before the app so it can switch the app to isolated sample storage.
-function injectSession(html, user, { accessPolicy = 'invite-only', inspection = false } = {}) {
-  const data = JSON.stringify({ displayName: user.displayName || user.email, email: user.email, role: user.role, accessPolicy, inspection }).replace(/</g, '\\u003c');
-  const before = `<script>window.JARC_SESSION=Object.freeze(${data});</script>${inspection ? '<script src="inspection.js"></script>' : ''}`;
+function injectSession(html, user, { accessPolicy = 'invite-only', inspection = false, beta = false } = {}) {
+  const data = JSON.stringify({ displayName: user.displayName || user.email, email: user.email, role: user.role, accessPolicy, inspection, beta }).replace(/</g, '\\u003c');
+  const before = `<script>window.JARC_SESSION=Object.freeze(${data});</script>${inspection ? '<script src="inspection.js"></script>' : ''}${beta ? '<script src="beta-store.js"></script>' : ''}`;
   return html
     .replace('<script src="timeline-core.js"></script>', `${before}<script src="timeline-core.js"></script>`)
     .replace('</body>', '<script src="auth-client.js"></script></body>');

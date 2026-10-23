@@ -48,13 +48,13 @@ test('admin:bootstrap refuses before db:setup', async () => {
 test('db:setup creates the sign-in collections and indexes, idempotently, with no users', async () => {
   const first = await run('db-setup.cjs', ['--confirm-db', DB]);
   assert.equal(first.code, 0, first.out); assert.match(first.out, /collection created: users/); assert.match(first.out, /No users or records were created/);
-  assert.deepEqual(await collections(), ['events', 'sessions', 'users']);
+  assert.deepEqual(await collections(), ['beta_changes', 'beta_tickets', 'events', 'sessions', 'users']);
   const names = (await mongo.db(DB).collection('users').indexes()).map(i => i.name).sort();
   assert.deepEqual(names, ['_id_', 'email_unique', 'entra_identity_unique']);
   const sessionIndexes = await mongo.db(DB).collection('sessions').indexes();
   assert.equal(sessionIndexes.find(i => i.name === 'expires_ttl').expireAfterSeconds, 0);
   const again = await run('db-setup.cjs', ['--confirm-db', DB]);
-  assert.equal(again.code, 0); assert.doesNotMatch(again.out, /(collection|index) created/); assert.match(again.out, /validator updated: users/);
+  assert.equal(again.code, 0); assert.doesNotMatch(again.out, /(collection|index) created/); assert.match(again.out, /validator unchanged: users/); assert.doesNotMatch(again.out, /validator updated/);
   assert.equal(await mongo.db(DB).collection('users').countDocuments(), 0);
   await assert.rejects(mongo.db(DB).collection('users').insertOne({ email: 'x@jarc.example', role: 'Owner', status: 'active', createdAt: new Date(), updatedAt: new Date() }), /Document failed validation/);
 });
