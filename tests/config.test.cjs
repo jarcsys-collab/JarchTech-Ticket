@@ -85,7 +85,7 @@ test('demo mode is local only and never a fallback for incomplete sign-in settin
 
 test('AUTH_MODE=entra requires complete, single-tenant settings and reports every problem without values', () => {
   const c = loadConfig(ENTRA);
-  assert.deepEqual({ ...c.auth }, { mode: 'entra', tenantId: ENTRA.ENTRA_TENANT_ID, clientId: ENTRA.ENTRA_CLIENT_ID, clientSecret: ENTRA.ENTRA_CLIENT_SECRET, baseUrl: 'http://localhost:4177', sessionSecret: ENTRA.SESSION_SECRET, secureCookies: false, accessPolicy: 'invite-only' });
+  assert.deepEqual({ ...c.auth }, { mode: 'entra', tenantId: ENTRA.ENTRA_TENANT_ID, clientId: ENTRA.ENTRA_CLIENT_ID, clientSecret: ENTRA.ENTRA_CLIENT_SECRET, baseUrl: 'http://localhost:4177', sessionSecret: ENTRA.SESSION_SECRET, secureCookies: false, accessPolicy: 'invite-only', inspection: false });
   const missing = problemsFor({ AUTH_MODE: 'entra' });
   for (const name of ['MONGODB_URI and MONGODB_DB_NAME', 'ENTRA_TENANT_ID', 'ENTRA_CLIENT_ID', 'ENTRA_CLIENT_SECRET', 'APP_BASE_URL', 'SESSION_SECRET']) assert.ok(missing.some(p => p.includes(name)), name);
   assert.match(problemsFor({ ...ENTRA, ENTRA_TENANT_ID: 'common' }).join(), /directory \(tenant\) ID, a GUID/);
@@ -117,4 +117,13 @@ test('ACCESS_POLICY is explicit: invite-only by default, tenant-members only whe
   assert.match(problemsFor({ AUTH_MODE: 'demo', ACCESS_POLICY: 'tenant-members' }).join(), /applies only when AUTH_MODE=entra/);
   assert.match(problemsFor({ ACCESS_POLICY: 'tenant-members' }).join(), /AUTH_MODE is not set/);
   assert.match(problemsFor({ ...ENTRA, ENTRA_TENANT_ID: '9188040d-6c67-4c5b-b112-36a304b66dad' }).join(), /personal Microsoft account tenant/);
+});
+
+test('INSPECTION_MODE is an explicit beta option: off by default, entra only, and strictly validated', () => {
+  assert.equal(loadConfig(ENTRA).auth.inspection, false, 'off unless enabled');
+  assert.equal(loadConfig({ ...ENTRA, INSPECTION_MODE: 'disabled' }).auth.inspection, false);
+  assert.equal(loadConfig({ ...ENTRA, INSPECTION_MODE: 'enabled' }).auth.inspection, true);
+  assert.match(problemsFor({ ...ENTRA, INSPECTION_MODE: 'yes' }).join(), /INSPECTION_MODE must be enabled or disabled/);
+  assert.match(problemsFor({ AUTH_MODE: 'demo', INSPECTION_MODE: 'enabled' }).join(), /INSPECTION_MODE applies only when AUTH_MODE=entra/);
+  assert.match(problemsFor({ INSPECTION_MODE: 'enabled' }).join(), /AUTH_MODE is not set/);
 });

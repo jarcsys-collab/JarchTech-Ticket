@@ -169,3 +169,35 @@ test('simultaneous first sign-ins of the same member create one account', async 
   assert.ok(results.every(r => r.status === 302), results.map(r => r.status).join(','));
   assert.equal(await users().countDocuments({ entraObjectId: member(15).oid }), 1);
 });
+
+test('inspection mode is offered only when INSPECTION_MODE=enabled and never changes the real role or server access', async () => {
+  const port = await freePort();
+  const inspectOrigin = `http://localhost:${port}`;
+  const inspectApp = await start(loadConfig({
+    NODE_ENV: 'test', PORT: String(port), MONGODB_URI: mongod.getUri(), MONGODB_DB_NAME: 'jarctech_beta_test', AUTH_MODE: 'entra', ACCESS_POLICY: 'tenant-members', INSPECTION_MODE: 'enabled',
+    ENTRA_TENANT_ID: TENANT, ENTRA_CLIENT_ID: CLIENT, ENTRA_CLIENT_SECRET: SECRET, APP_BASE_URL: inspectOrigin, SESSION_SECRET: 'beta-session-secret-0123456789abcdefghijkl'
+  }), { log: { log() {}, error() {} }, oidc: { issuer: entra.issuer, allowInsecure: true } });
+  const inspectBase = `http://127.0.0.1:${inspectApp.port}`;
+  const get = (p, cookie) => fetch(inspectBase + p, { redirect: 'manual', headers: cookie ? { Cookie: cookie } : {} });
+  try {
+    // Sign in on the inspection-enabled server (same mock tenant and database).
+    const login = await get('/auth/login');
+    const flow = login.headers.getSetCookie().find(c => c.startsWith('jt_auth=')).split(';')[0];
+    const back = new URL(entra.authorize(login.headers.get('location'), member(20)));
+    const cb = await get(back.pathname + back.search, flow);
+    const session = cb.headers.getSetCookie().find(c => c.startsWith('jt_session=')).split(';')[0];
+    const page = await (await get('/', session)).text();
+    assert.match(page, /"role":"Requestor","accessPolicy":"tenant-members","inspection":true/);
+    assert.match(page, /<script src="inspection\.js"><\/script><script src="timeline-core\.js">/, 'inspection.js loads before the app');
+    assert.equal((await get('/inspection.js', session)).status, 200);
+    assert.equal((await get('/inspection.js')).status, 401, 'not served without a session');
+    // Previewing a role is client-side only: the server role and admin API are unchanged.
+    const me = await (await get('/api/v1/me', `${session}; jarc-inspection-view=Admin`)).json();
+    assert.equal(me.user.role, 'Requestor');
+    assert.equal((await get('/api/v1/users', session)).status, 403);
+    // The default server (INSPECTION_MODE unset) does not offer it.
+    const res = await signIn(member(21));
+    const normal = await call('/', { cookie: res.session });
+    assert.doesNotMatch(normal.text, /inspection\.js/); assert.match(normal.text, /"inspection":false/);
+  } finally { await inspectApp.shutdown(); }
+});

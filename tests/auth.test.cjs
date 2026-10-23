@@ -113,8 +113,9 @@ test('an invited person signs in once: the invitation binds to their Entra objec
   assert.equal(me.json.user.role, 'Requestor'); assert.equal(me.json.user.email, 'person2@jarc.example');
   const index = await call('/', { cookie: res.session });
   assert.equal(index.status, 200);
-  assert.match(index.text, /window\.JARC_SESSION=Object\.freeze\(\{"displayName":"Person 2","email":"person2@jarc.example","role":"Requestor","accessPolicy":"invite-only"\}\)/);
+  assert.match(index.text, /window\.JARC_SESSION=Object\.freeze\(\{"displayName":"Person 2","email":"person2@jarc.example","role":"Requestor","accessPolicy":"invite-only","inspection":false\}\)/);
   assert.match(index.text, /<script src="auth-client\.js"><\/script><\/body>/);
+  assert.doesNotMatch(index.text, /inspection\.js/, 'inspection mode is off unless enabled');
   // A different Microsoft account with the same email can never take over the already-bound invitation.
   const other = await signIn(person(3, { email: 'person2@jarc.example', preferred_username: 'person2@jarc.example' }));
   assert.equal(other.status, 403); assert.equal(other.session, null);

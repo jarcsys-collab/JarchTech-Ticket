@@ -217,6 +217,33 @@ npm.cmd run walkthrough
 $env:WALKTHROUGH_SCREENSHOTS = 'tmp'; npm.cmd run walkthrough
 ```
 
+### Beta inspection mode (`INSPECTION_MODE=enabled`)
+
+An explicit beta option for signed-in mode, off unless `INSPECTION_MODE=enabled`. It lets anyone signed in try every role's workflow without changing real roles.
+
+- **Entering:** a **Preview views** button in the header offers **Requestor**, **Admin**, and **Developer**. While inspecting, the header's **Preview views** switch changes the view at any time, and a persistent **"Inspection mode — sample data"** banner offers **Exit inspection** and **Reset sample data** (with confirmation).
+- **Sample data only:** inspection runs the prototype on **sample records stored only in that browser**, under their own storage prefix (`jarc-inspection:`). Normal browser records (`jarc-helpdesk-v1`) and their recovery backups are never read or written while inspecting. The sample copy has its own recovery screen.
+- **Nothing on the server changes:** the signed-in account, the **server role**, and server access are unchanged. The header keeps showing the real name and role, `/api/v1/me` reports the real role, and the admin API still refuses non-Admins. Privileged actions (assignment, approval, closure, and so on) are simulated on the sample data only. Real user management (the **Users** screen) is hidden while inspecting.
+- **Turning it off:** remove `INSPECTION_MODE` (or set `disabled`) and restart. The server then stops sending `inspection.js`, so the control and sample data are unavailable even if a browser still remembers an inspection view.
+
+**Limitation:** inspection exercises the browser-only prototype workflows. It does not test shared, server-backed tickets, which don't exist yet.
+
+### Optional inspection walkthrough (mock Microsoft sign-in)
+
+`npm.cmd run walkthrough:inspection` signs in with a **mock** Entra provider and a **temporary** MongoDB, with `INSPECTION_MODE=enabled`. It drives every workflow on sample data in headless Chrome or Edge, then prints a pass/fail result per flow:
+
+1. Requestor submission and progress
+2. Admin review, clarification, rejection, priority, and assignment
+3. Developer meetings and confirmation
+4. Two-step project creation and date validation
+5. Gantt editing, progress, and reload persistence
+6. Testing, acceptance, corrections, release, and closure
+7. The linked change lifecycle, including rejection
+8. Search, filters, notifications, and dialog controls
+9. Sign-in, logout, sample-data recovery and reset, exit, the privilege boundary, and normal-record isolation
+
+It never contacts Microsoft or Atlas and never reads `.env`. Ports are chosen automatically, and it uses a temporary browser profile. Set `INSPECTION_SCREENSHOTS` to a folder to save screenshots. It is not part of `npm test` or GitHub Actions.
+
 ### Optional signed-in screen check (mock Microsoft sign-in)
 
 `npm.cmd run walkthrough:auth` runs headless Chrome or Edge against the server in `AUTH_MODE=entra`. It uses a **mock** Entra provider and a **temporary** MongoDB, so it never contacts Microsoft or Atlas and never reads `.env`. It checks:
@@ -267,7 +294,9 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `server/auth/oidc.cjs` | Microsoft Entra OpenID Connect (code flow with PKCE, state, nonce, and ID token signature checks) via `openid-client` |
 | `server/auth/store.cjs` | Admission rules, invitations, role changes, server-side sessions, and the audit log |
 | `server/auth/pages.cjs`, `server/auth/tokens.cjs` | Sign-in, access-denied, signed-out, and error pages; random tokens and the encrypted sign-in flow cookie |
-| `public/auth-client.js` | Signed-in mode only: header name and role, Sign out, and the Admin Users screen |
+| `public/auth-client.js` | Signed-in mode only: header name and role, Sign out, the Admin Users screen, and the inspection controls and banner |
+| `public/inspection.js` | Beta inspection mode (sent only when `INSPECTION_MODE=enabled`): preview view, isolated sample-data storage, exit, and reset |
+| `scripts/inspection-walkthrough.mjs` | Optional per-flow browser walkthrough of every workflow in inspection mode (`npm run walkthrough:inspection`) |
 | `scripts/db-setup.cjs`, `scripts/admin-bootstrap.cjs`, `scripts/db-command.cjs` | The one-time database commands described above, and their shared confirmation and redaction handling |
 | `scripts/auth-screens-check.mjs` | Optional signed-in screen check with a mock Entra provider and a temporary database (`npm run walkthrough:auth`) |
 | `tests/helpers/mock-entra.cjs` | Local mock of Microsoft Entra's OpenID Connect endpoints for tests and the screen check |

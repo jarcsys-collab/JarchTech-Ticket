@@ -13,6 +13,14 @@ Status: **implemented on `feature/entra-auth`** and tested with a mock Entra pro
 
 **Still open:** the first Admin's work email (asked when real configuration starts); production app registration and credential type.
 
+## Beta inspection mode (`INSPECTION_MODE=enabled`)
+
+An explicit, separately switchable beta option. Signed-in people can preview the Requestor, Admin, and Developer views on **sample data in their own browser**, under the storage prefix `jarc-inspection:`.
+- **No effect on authorization:** the session, the server role, `/api/v1/me`, and every server permission stay exactly as they are.
+- **Only a display hint is sent:** the server sends `inspection.js` and an `inspection: true` hint only when the option is enabled.
+- **Limited scope:** the switch affects only the browser-only prototype screens. Real user management is hidden while inspecting, and the admin API keeps refusing non-Admins.
+- **Off by default:** `INSPECTION_MODE` is `disabled` unless set, and it is rejected in demo mode.
+
 ## Beta access policy (`ACCESS_POLICY=tenant-members`)
 
 **Purpose:** let the whole company try JarcTech Ticket during the beta without an Admin inviting each person. It is an explicit setting: with `ACCESS_POLICY` unset (or `invite-only`), the invite-only rules below apply unchanged.
