@@ -277,7 +277,7 @@ try {
     check('search narrows the list', await w(`[...document.querySelectorAll('#records [data-id]')].map(r=>r.dataset.id).join()==='JRC-1040'`), await w(`[...document.querySelectorAll('#records [data-id]')].map(r=>r.dataset.id).join()`));
     await w(`__w.set('.search','');__w.set('#status-filter','Closed');true`);
     check('the status filter shows only matching tickets', await w(`(()=>{const ids=[...document.querySelectorAll('#records [data-id]')].map(r=>r.dataset.id);return ids.length>=2&&ids.every(id=>__w.ticket(id).status==='Closed')})()`));
-    await w(`__w.set('#status-filter','All statuses');__w.click('#notifications');true`);
+    await w(`__w.set('#status-filter','');__w.click('#notifications');true`);
     check('notifications list workflow activity', await w(`__w.overlay() && __w.text().includes('Notifications') && __w.text().includes('JRC-1043')`));
     await w(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));true`);
     check('Escape closes a dialog', await w(`!__w.overlay()`));

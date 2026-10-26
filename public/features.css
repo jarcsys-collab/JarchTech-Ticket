@@ -1,0 +1,48 @@
+/* List filters, pages, notifications, and attachments. Uses the existing JARC teal palette. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.toolbar.filters{flex-wrap:wrap;margin-bottom:12px}
+.toolbar.filters .search{flex:1 1 260px}
+.toolbar.filters select{flex:0 1 auto;max-width:190px;margin-top:0}
+.toolbar.filters .secondary:disabled{opacity:.5;cursor:default}
+.list-status{display:flex;justify-content:space-between;gap:12px;margin:0 3px 14px;font-size:11px;color:#6f8488}
+.list-status .record-count{margin-left:0}
+#records[aria-busy=true]{opacity:.55;transition:opacity .15s}
+tr[data-id]:focus-visible td{outline:2px solid #8ed8da;outline-offset:-2px;background:#f0fcfc}
+.pager{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:14px;font-size:11px;color:#6f8488}
+.pager button:disabled,.actions button:disabled{opacity:.5;cursor:default}
+.actions.centered{justify-content:center}
+.icon-button span:empty{display:none}
+/* Notifications */
+.notifications{list-style:none;padding:0;margin:18px 0 0}
+.notification{display:flex;gap:10px;align-items:flex-start;border-bottom:1px solid #e9efef;padding:4px 0}
+.notification-open{flex:1;text-align:left;padding:12px 10px 12px 18px;border-radius:8px;position:relative;font-size:12px;line-height:1.55;color:#5c777d}
+.notification-open:hover,.notification-open:focus-visible{background:#f0fcfc}
+.notification-open b{display:block;color:#304b52;font-weight:600}
+.notification-open span{display:block}
+.notification-open small{display:block;color:#93a4a7;font-size:10px;margin-top:3px}
+.notification.unread .notification-open{background:#f2fbfb}
+.notification.unread .notification-open:before{content:'';position:absolute;left:6px;top:18px;width:7px;height:7px;border-radius:50%;background:var(--teal)}
+.notification .mark-read{margin-top:10px;white-space:nowrap}
+.activity-feed{margin-top:26px;font-size:12px;color:#5c777d}
+.activity-feed summary{cursor:pointer;font-weight:600;color:#526b71}
+/* Attachments */
+.uploader{margin-top:14px}
+.uploader input[type=file]{padding:9px;background:#f8fbfb}
+.uploader .read-only{margin-top:6px}
+.upload-list{list-style:none;padding:0;margin:8px 0 0}
+.upload{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border:1px solid #e4ebeb;border-radius:8px;margin-bottom:6px;font-size:11px;background:white}
+.upload-name{font-weight:600;color:#304b52;overflow-wrap:anywhere}
+.upload small{color:#8a9a9e}
+.upload small.ok{color:#008f87}
+.upload small.error{color:#c0574d;flex-basis:100%}
+.upload.error{border-color:#f1c9c4;background:#fff8f7}
+.upload progress{width:120px;height:6px;accent-color:var(--teal)}
+.upload-actions{margin-left:auto;display:flex;gap:6px}
+.upload-actions .secondary{padding:5px 9px;font-size:10px}
+.file-links{list-style:none;padding:0;margin:6px 0 0}
+.file-links li{margin:3px 0;font-size:11px}
+.file-links a{color:#007f86;font-weight:600;text-decoration:none;overflow-wrap:anywhere}
+.file-links a:hover,.file-links a:focus-visible{text-decoration:underline}
+.file-links small{color:#93a4a7;font-size:10px;margin-left:4px}
+.ticket-files{margin-top:6px}
+@media(max-width:720px){.toolbar.filters select{max-width:none;flex:1 1 45%}.list-status{flex-direction:column;gap:4px}}

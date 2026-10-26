@@ -23,6 +23,12 @@ function progress(t) { return TicketCore.progress(t); }
 function prog(t) { return `<div class="progress"><span class="track"><i style="width:${progress(t)}%"></i></span>${progress(t)}%</div>`; }
 function person(n) { return n ? `<span class="person"><span class="mini-avatar">${esc(n.split(' ').map(x => x[0]).join(''))}</span>${esc(n)}</span>` : '<span style="color:#a0abad">Unassigned</span>'; }
 
+// Download links for files attached to an activity entry (shared beta workspace). Downloads require sign-in.
+function fileLinks(list) {
+  if (!list || !list.length) return '';
+  return `<ul class="file-links">${list.map(f => `<li><a href="/api/v1/beta/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(AttachmentRules.formatSize(f.size))}</small></li>`).join('')}</ul>`;
+}
+
 // Side drawer dialog.
 function open(html) {
   $('#dialog-content').innerHTML = html;

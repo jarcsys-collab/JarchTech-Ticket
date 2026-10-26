@@ -160,12 +160,14 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
 // Adds the signed-in user's display details to index.html. Values are JSON with < escaped, so they cannot end the script.
 // accessPolicy is display-only here (it explains who can sign in on the Users screen); the server enforces it.
 // With inspection enabled, inspection.js loads before the app so it can switch the app to isolated sample storage.
+// With the beta workspace enabled, beta-store.js loads before the app and beta-features.js (notifications and
+// attachments) after everything else.
 function injectSession(html, user, { accessPolicy = 'invite-only', inspection = false, beta = false } = {}) {
   const data = JSON.stringify({ displayName: user.displayName || user.email, email: user.email, role: user.role, accessPolicy, inspection, beta }).replace(/</g, '\\u003c');
   const before = `<script>window.JARC_SESSION=Object.freeze(${data});</script>${inspection ? '<script src="inspection.js"></script>' : ''}${beta ? '<script src="beta-store.js"></script>' : ''}`;
   return html
     .replace('<script src="timeline-core.js"></script>', `${before}<script src="timeline-core.js"></script>`)
-    .replace('</body>', '<script src="auth-client.js"></script></body>');
+    .replace('</body>', `<script src="auth-client.js"></script>${beta ? '<script src="beta-features.js"></script>' : ''}</body>`);
 }
 
 module.exports = { createAuth, injectSession };

@@ -183,6 +183,7 @@ Railway builds from GitHub (`jarcsys-collab/JarchTech-Ticket`, `main`) using `ra
 | `MONGODB_DB_NAME` | The agreed staging database name |
 | `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | From the Entra registration used for staging |
 | `SESSION_SECRET` | A **new** random value for staging. Don't reuse the local one. |
+| `BETA_SIMULATION` | `enabled` for the shared beta workspace (optional; off unless set). Attachments, notifications, and search need **no additional variables**: files are stored in the same MongoDB database. |
 
 Don't set `PORT` or `HOST` in Railway; Railway provides `PORT`. Don't copy the local `.env` into Railway.
 
@@ -238,22 +239,49 @@ An explicit beta capability for signed-in mode, off unless `BETA_SIMULATION=enab
 - **Loading:** the records show a loading state, and an error state with **Try again**.
 - **Refreshing:** shared records refresh when you switch views or return to the tab.
 
+**Attachments:**
+- **Where:** attach screenshots and supporting files when submitting a request or commenting on a ticket (a comment can be files only). Each file shows upload progress, its name and size, per-file errors, and Retry or Remove. Ticket details list every attachment with a download link.
+- **Limits (enforced on the server):** up to 5 files per request or comment, 10 MB each, 200 MB for all beta files together, and 20 uploads per member that aren't yet part of a ticket. Allowed types: PNG, JPEG, GIF, WebP, PDF, TXT, LOG, CSV, DOCX, XLSX, PPTX.
+- **Checks:** the server checks each file's **content** (image and PDF signatures, valid UTF-8 text with no binary data, and the Office package parts, refusing macros), not just its name. File names are cleaned (no paths, control characters, or unsafe characters; at most 120 characters). SVG, HTML, scripts, executables, and archives are refused. **There is no malware scanning.**
+- **Storage:** file contents are stored in MongoDB GridFS (`beta_files.files`, `beta_files.chunks`) in the same database, with records in `beta_attachments`, so files survive redeployments. They are never written to the container filesystem. No other storage service, credential, or variable is needed. Storage counts against the database plan, which is why the 200 MB limit exists.
+- **Access:** every upload and download needs a signed-in session, and uploads must come from the app's own origin. Until a file is part of a ticket, only its uploader can download or remove it. After that, any signed-in beta member can download it. There are no public file links.
+- **Safe downloads:** files are always served as downloads (`Content-Disposition: attachment`), with `nosniff`, a sandboxing `Content-Security-Policy`, and `no-store`, so an uploaded file can never run as a page in the app's origin.
+- **Cleanup:** uploads never added to a ticket are deleted after 24 hours, along with any file data left behind by an interrupted upload. Files on tickets are kept until a beta reset.
+
+**Notifications (in-app only):**
+- **What triggers them:** new requests, assignments, comments, requests for information, meeting proposals and confirmations, project creation, acceptance requests, returned corrections, relevant status changes, and scope-change steps.
+- **Storage and links:** notifications are stored in `beta_notifications`, and the bell shows an unread badge. Clicking one opens its ticket, project Gantt view, or change. There's **Mark read** for each one and **Mark all as read**.
+- **Simulated inboxes:** recipients are inboxes for the simulated views, never real people found by sample names. The inboxes are **Admin**, the **sample developer** (the Developer view is Miguel Santos), and **Requestor**, which holds the shared sample requests plus your own requests. Nothing is emailed.
+- **Read state** is separate for each signed-in tester.
+- **No duplicates or self-alerts:** each inbox gets one notification per saved change, so repeated submissions and retries never duplicate it. The view that acted is not notified, and your own actions never show as unread for you.
+- **Refreshing:** the badge refreshes after each save, when you switch views or return to the tab, and once a minute while the tab is visible.
+
+**Search and filters:**
+- **What you can search:** the ticket and project lists search the ID, summary (or project name), and description. You can filter by status, priority, department, and assigned sample developer (including **Unassigned**).
+- **Using them:** filters combine, and the list shows a result count, pages of 25, empty states with **Clear filters**, and loading and error states with **Try again**.
+- **Where the search runs:** in the beta workspace, the server searches every shared record for the current view and returns one page, using the `workspace_*` indexes on `beta_tickets`. Local and inspection modes filter in the browser with the same rules.
+- **When filters reset:** they stay set while you open and close details and save changes. Switching the simulation view or the sidebar section starts from an unfiltered list.
+
 **Data management (explicit only; the server never seeds or resets on its own):**
 
 ```powershell
-npm.cmd run db:setup -- --confirm-db <database>               # creates/updates collections, validation, and indexes (including beta_*)
+npm.cmd run db:setup -- --confirm-db <database>               # creates/updates collections, validation, and indexes (including beta_*, attachments, and notifications)
 npm.cmd run beta:seed -- --confirm-db <database>              # adds the sample records; refuses if the workspace has records
 npm.cmd run beta:seed -- --confirm-db <database> --replace    # replaces only the beta workspace records with the samples
 ```
 
-**Reset beta workspace** in the banner (type `RESET` to confirm) restores the sample records for everyone. It never touches accounts, sessions, browser-only records, or other collections, and it is recorded in the audit log. Browser-local tickets are **not** migrated.
+**Reset beta workspace** in the banner (type `RESET` to confirm) restores the sample records for everyone. It also deletes all beta attachments (the beta-only GridFS bucket) and beta notifications. It never touches accounts, sessions, browser-only records, or other collections, and it is recorded in the audit log. Browser-local tickets are **not** migrated.
+
+**Upgrading an existing beta database:** after deploying a version that adds collections or indexes, readiness waits for them. Run `db:setup` against that database **before** the deploy. It only adds what is missing, needs no extra database permissions for new collections and indexes, and leaves existing records alone.
 
 **Limitations:**
 - The beta workspace is test data, and any signed-in beta member can act in any view and reset it.
 - Real Admin and Developer roles and real ticket ownership are not yet used for tickets.
 - Email and calendar are not connected; notifications are in-app only.
+- Attachments are not scanned for malware. A file already on a ticket can't be removed individually; a beta reset removes all beta files.
+- The workspace still loads every beta record at once for the dashboard counts and details. Only the lists are searched and paged on the server.
 
-`npm.cmd run walkthrough:beta` checks all of this in a real headless browser with two separate browser contexts, a **mock** Entra provider, and a **temporary** MongoDB. Set `BETA_SCREENSHOTS` to save screenshots.
+`npm.cmd run walkthrough:beta` checks all of this in a real headless browser with two separate browser contexts, a **mock** Entra provider, and a **temporary** MongoDB. `npm.cmd run walkthrough:features` does the same for attachments, notifications, and search/filters. Set `BETA_SCREENSHOTS` to save screenshots.
 
 ### Beta inspection mode (`INSPECTION_MODE=enabled`)
 
@@ -327,7 +355,7 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `server/database.cjs` | MongoDB client for the configured database; currently used only for the readiness ping |
 | `server/redact.cjs` | Removes connection strings, usernames, and passwords from logged text |
 | `server/http.cjs` | Cookies, JSON request bodies (size-limited), responses, and same-origin checks |
-| `server/schema.cjs` | `users`, `sessions`, and `events` validators and indexes; created only by `npm run db:setup`, checked read-only by `/readyz` |
+| `server/schema.cjs` | `users`, `sessions`, `events`, and beta workspace validators and indexes; created only by `npm run db:setup`, checked read-only by `/readyz` |
 | `server/auth/index.cjs` | Sign-in routes, the signed-in API (`/api/v1/me`, Admin `/api/v1/users`), and the gate in front of the app |
 | `server/auth/oidc.cjs` | Microsoft Entra OpenID Connect (code flow with PKCE, state, nonce, and ID token signature checks) via `openid-client` |
 | `server/auth/store.cjs` | Admission rules, invitations, role changes, server-side sessions, and the audit log |
@@ -337,7 +365,12 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `public/workflow-core.js` | Ticket, project, and linked-change workflow rules (view and status checks), shared by the browser and the server |
 | `public/sample-data.js` | Sample records (local demo, inspection, and the beta workspace seed) and their illustrative dated schedule |
 | `public/beta-store.js` | Shared beta workspace client (sent only when `BETA_SIMULATION=enabled`): loading, saving, conflicts, failed saves, refresh, and reset |
-| `server/beta/index.cjs` | Shared beta workspace API (`/api/v1/beta/*`): versioned writes, repeated-submission protection, actor and view in activity, seed, and reset |
+| `server/beta/index.cjs` | Shared beta workspace API (`/api/v1/beta/*`): versioned writes, repeated-submission protection, actor and view in activity, search, seed, and reset |
+| `server/beta/attachments.cjs`, `public/attachment-rules.js` | Beta attachments: GridFS storage, content checks, safe downloads, claiming files for a save, abandoned-upload cleanup; shared limits and safe names |
+| `server/beta/notifications.cjs` | Beta in-app notifications: who is notified for each action, simulated inboxes, per-member read state, duplicate prevention |
+| `public/list-filter.js`, `public/list-view.js` | Ticket and project list search and filters (shared rules), result count, pages, and empty, loading, and error states |
+| `public/beta-features.js`, `public/features.css` | Notifications panel and badge, and the attachment uploader (sent only when `BETA_SIMULATION=enabled`) |
+| `scripts/beta-features-walkthrough.mjs` | Real-browser walkthrough of attachments, notifications, and search with two signed-in contexts (`npm run walkthrough:features`) |
 | `scripts/beta-seed.cjs`, `scripts/beta-walkthrough.mjs` | Explicit beta seed command (`npm run beta:seed`) and the beta real-browser walkthrough (`npm run walkthrough:beta`) |
 | `scripts/inspection-walkthrough.mjs` | Optional per-flow browser walkthrough of every workflow in inspection mode (`npm run walkthrough:inspection`) |
 | `scripts/db-setup.cjs`, `scripts/admin-bootstrap.cjs`, `scripts/db-command.cjs` | The one-time database commands described above, and their shared confirmation and redaction handling |

@@ -81,7 +81,12 @@ const COLLECTIONS = {
     } },
     indexes: [
       { key: { workspace: 1, id: 1 }, name: 'workspace_id', unique: true },
-      { key: { workspace: 1, requestId: 1 }, name: 'workspace_request', unique: true, partialFilterExpression: { requestId: { $type: 'string' } } }
+      { key: { workspace: 1, requestId: 1 }, name: 'workspace_request', unique: true, partialFilterExpression: { requestId: { $type: 'string' } } },
+      // List search: newest first, optionally narrowed by status, developer, or the member's own requests.
+      { key: { workspace: 1, createdAt: -1, id: -1 }, name: 'workspace_created' },
+      { key: { workspace: 1, status: 1, createdAt: -1 }, name: 'workspace_status_created' },
+      { key: { workspace: 1, dev: 1, createdAt: -1 }, name: 'workspace_dev_created' },
+      { key: { workspace: 1, 'requester.id': 1 }, name: 'workspace_requester' }
     ]
   },
   beta_changes: {
@@ -106,11 +111,79 @@ const COLLECTIONS = {
       { key: { workspace: 1, requestId: 1 }, name: 'workspace_request', unique: true, partialFilterExpression: { requestId: { $type: 'string' } } },
       { key: { workspace: 1, ticket: 1 }, name: 'workspace_ticket' }
     ]
+  },
+  // Beta attachment records (server/beta/attachments.cjs). File bytes live in the beta-only GridFS bucket below.
+  beta_attachments: {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['workspace', 'name', 'ext', 'size', 'state', 'uploadedBy', 'uploadedAt'],
+      properties: {
+        workspace: { enum: ['beta'] },
+        name: { bsonType: 'string', minLength: 1, maxLength: 120 },
+        ext: { bsonType: 'string', maxLength: 5 },
+        size: { bsonType: ['int', 'long', 'double'], minimum: 1, maximum: 10485760 },
+        state: { enum: ['pending', 'claimed', 'attached'] },
+        uploadedBy: { bsonType: 'string' },
+        uploadedAt: { bsonType: 'date' },
+        expiresAt: { bsonType: 'date' },
+        ticket: nullable('string')
+      }
+    } },
+    indexes: [
+      { key: { workspace: 1, state: 1, expiresAt: 1 }, name: 'workspace_state_expires' },
+      { key: { workspace: 1, uploadedBy: 1, state: 1 }, name: 'workspace_uploader_state' },
+      { key: { workspace: 1, ticket: 1 }, name: 'workspace_ticket' },
+      { key: { claim: 1 }, name: 'claim', partialFilterExpression: { claim: { $type: 'string' } } }
+    ]
+  },
+  // In-app notifications (server/beta/notifications.cjs): one per simulated inbox and record version; readBy holds
+  // the signed-in members who have read it.
+  beta_notifications: {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['workspace', 'key', 'inbox', 'type', 'title', 'record', 'kind', 'readBy', 'createdAt'],
+      properties: {
+        workspace: { enum: ['beta'] },
+        key: { bsonType: 'string' },
+        inbox: { bsonType: 'string', pattern: '^(admin|requestor:sample|developer:.+|member:[0-9a-f]{24})$' },
+        title: { bsonType: 'string', maxLength: 150 },
+        text: { bsonType: 'string', maxLength: 300 },
+        record: { bsonType: 'string', pattern: '^(JRC|CR)-[0-9]+$' },
+        kind: { enum: ['ticket', 'change'] },
+        readBy: { bsonType: 'array', maxItems: 5000 },
+        createdAt: { bsonType: 'date' }
+      }
+    } },
+    indexes: [
+      { key: { workspace: 1, key: 1 }, name: 'workspace_key', unique: true },
+      { key: { workspace: 1, inbox: 1, createdAt: -1, _id: -1 }, name: 'workspace_inbox_created' }
+    ]
+  },
+  // GridFS bucket for beta attachment bytes. Index names match the ones the MongoDB driver expects, so it never
+  // creates its own.
+  'beta_files.files': {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['length', 'filename', 'uploadDate', 'metadata'],
+      properties: { metadata: { bsonType: 'object', required: ['workspace', 'uploadedBy'], properties: { workspace: { enum: ['beta'] } } } }
+    } },
+    indexes: [
+      { key: { filename: 1, uploadDate: 1 }, name: 'filename_1_uploadDate_1' },
+      { key: { 'metadata.workspace': 1, uploadDate: 1 }, name: 'workspace_uploaded' }
+    ]
+  },
+  'beta_files.chunks': {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['files_id', 'n', 'data'],
+      properties: { files_id: { bsonType: 'objectId' }, n: { bsonType: 'int', minimum: 0 }, data: { bsonType: 'binData' } }
+    } },
+    indexes: [{ key: { files_id: 1, n: 1 }, name: 'files_id_1_n_1', unique: true }]
   }
 };
-// Sign-in needs the core collections; the beta workspace needs its own two only when BETA_SIMULATION is enabled.
+// Sign-in needs the core collections; the beta workspace needs its own only when BETA_SIMULATION is enabled.
 const CORE_COLLECTIONS = ['users', 'sessions', 'events'];
-const BETA_COLLECTIONS = ['beta_tickets', 'beta_changes'];
+const BETA_COLLECTIONS = ['beta_tickets', 'beta_changes', 'beta_attachments', 'beta_notifications', 'beta_files.files', 'beta_files.chunks'];
 
 // Idempotent: creates missing collections and indexes and refreshes validators. Returns a summary of actions.
 async function ensureSchema(db) {
