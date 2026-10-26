@@ -145,7 +145,10 @@ function createStore(db, { now = () => new Date() } = {}) {
     return publicUser(doc);
   }
 
-  // Role and status changes by an Admin. Admins cannot change themselves, and the last active Admin stays.
+  // Role and status changes by a Developer (the only role that manages users). Nobody changes their own role or access,
+  // and at least one active Developer always remains, even when two Developers change each other at the same moment:
+  // the change is written only if the target is unchanged since it was read, then the remaining active Developers are
+  // counted, and the change is undone if none remain.
   async function updateUser(id, changes, actor) {
     let _id;
     try { _id = new ObjectId(String(id)); } catch { throw new StoreError(404, 'not-found'); }
@@ -159,9 +162,15 @@ function createStore(db, { now = () => new Date() } = {}) {
     if (set.status === 'active' && target.status === 'invited') throw new StoreError(409, 'invitation-not-accepted');
     // Re-enabling someone who never signed in restores their invitation; only a sign-in can make them active.
     if (set.status === 'active' && !target.entraObjectId) set.status = 'invited';
-    const losesAdmin = target.role === 'Admin' && target.status === 'active' && ((set.role && set.role !== 'Admin') || set.status === 'disabled');
-    if (losesAdmin && await users.countDocuments({ role: 'Admin', status: 'active', _id: { $ne: _id } }) === 0) throw new StoreError(409, 'last-admin');
-    await users.updateOne({ _id }, { $set: { ...set, updatedAt: now() } });
+    const losesDeveloper = target.role === 'Developer' && target.status === 'active' && ((set.role && set.role !== 'Developer') || set.status === 'disabled');
+    const otherDevelopers = () => users.countDocuments({ role: 'Developer', status: 'active', _id: { $ne: _id } });
+    if (losesDeveloper && await otherDevelopers() === 0) throw new StoreError(409, 'last-developer');
+    const { modifiedCount } = await users.updateOne({ _id, role: target.role, status: target.status }, { $set: { ...set, updatedAt: now() } });
+    if (!modifiedCount) throw new StoreError(409, 'changed-meanwhile');
+    if (losesDeveloper && await users.countDocuments({ role: 'Developer', status: 'active' }) === 0) {
+      await users.updateOne({ _id, ...set }, { $set: { role: target.role, status: target.status, updatedAt: now() } });
+      throw new StoreError(409, 'last-developer');
+    }
     if (set.status === 'disabled') await sessions.deleteMany({ userId: _id });
     await record('user.updated', { actorId: actor._id, subjectId: _id, changes: set, previous: { role: target.role, status: target.status } });
     return publicUser({ ...target, ...set });

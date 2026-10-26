@@ -16,7 +16,7 @@ function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Dat
   const enabled = Boolean(config && config.enabled);
 
   async function recipients(inbox) {
-    if (inbox === ADMINS) return users.find({ role: 'Admin', status: 'active', emailReminders: true }).toArray();
+    if (inbox === ADMINS) return users.find({ role: { $in: ['Admin', 'Developer'] }, status: 'active', emailReminders: true }).toArray();
     const m = /^user:([0-9a-f]{24})$/.exec(inbox);
     if (!m) return [];
     return users.find({ _id: new ObjectId(m[1]), status: 'active', emailReminders: true }).toArray();

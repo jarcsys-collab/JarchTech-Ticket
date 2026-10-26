@@ -2,8 +2,8 @@
 // Who receives them is decided by an addressing scheme:
 //   simulated (beta)  admin, developer:<sample name>, requestor:sample, member:<userId>. Simulated inboxes are never
 //                     real people found by name, and are never emailed.
-//   accounts (mine)   user:<userId> for the requestor and the assigned Developer account, and admins for every
-//                     active Admin account (checked when read, so a role change takes effect at once).
+//   accounts (mine)   user:<userId> for the requestor and the assignee, and "admins", the shared staff inbox read by
+//                     every active Admin and Developer account (checked when read, so a role change applies at once).
 // Each notification is one document per inbox and record version (or reminder stage), with a unique key, so retries,
 // repeated saves, and repeated reminder runs never duplicate it. Read state is per signed-in member (readBy). The
 // acting inbox is never notified, and the actor's copy of any other inbox starts as read.
@@ -31,15 +31,15 @@ const simulated = {
 };
 // Real accounts for My workspace. The view is the capacity the actor acted in (Admin, Developer, or Requestor).
 const accounts = {
-  inboxesFor: user => [`user:${user._id}`, ...(user.role === 'Admin' ? [ADMINS] : [])],
-  label: user => (user.role === 'Admin' ? 'Your notifications and the Admin inbox' : 'Your notifications'),
+  inboxesFor: user => [`user:${user._id}`, ...(['Admin', 'Developer'].includes(user.role) ? [ADMINS] : [])],
+  label: user => (['Admin', 'Developer'].includes(user.role) ? 'Your notifications and the shared staff inbox (Admins and Developers)' : 'Your notifications'),
   resolve: (to, ticket, before) => ({
     admin: ADMINS,
     requestor: ticket.requester && ticket.requester.id ? `user:${ticket.requester.id}` : null,
     developer: ticket.devId ? `user:${ticket.devId}` : null,
     'previous-developer': before && before.devId && before.devId !== ticket.devId ? `user:${before.devId}` : null
   }[to]),
-  own: (actor, view) => new Set([`user:${actor._id}`, ...(view === 'Admin' ? [ADMINS] : [])])
+  own: (actor, view) => new Set([`user:${actor._id}`, ...(['Admin', 'Developer'].includes(view) ? [ADMINS] : [])])
 };
 
 // Who hears about a ticket action: [{ type, title, to: ['admin' | 'requestor' | 'developer' | 'previous-developer'] }].

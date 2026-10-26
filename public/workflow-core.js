@@ -8,6 +8,7 @@
   const people = TicketCore.people; // sample developers; the Developer view acts as the first one
   const SAMPLE_DEVELOPER = people[0];
   const VIEWS = ['Requestor', 'Admin', 'Developer'];
+  const STAFF = ['Admin', 'Developer'];
   const DEPARTMENTS = ['Sales', 'Operations', 'Finance', 'Human Resources', 'Procurement', 'Customer Service', 'IT'];
   const CATEGORIES = ['New feature', 'Enhancement', 'Bug / issue', 'Access request'];
   const PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
@@ -28,13 +29,15 @@
   };
   const isDate = v => TL.day(v) !== null;
 
-  // Who the caller is acting as. ctx: { view, isRequester(ticket), isAssignee(ticket), developer(input), owners }.
-  // The beta workspace and local modes act as the sample developer; My workspace supplies real-account checks.
+  // Who the caller is acting as. ctx: { view, isRequester(ticket), developer(input), owners }.
+  // Admin and Developer are both staff: they manage every ticket (review, assign, decide, close) and do the delivery
+  // work (planning, scope, tasks, acceptance, release). User management is not a ticket action; only real Developer
+  // accounts do it, on the server. My workspace supplies real-account checks; other modes use the sample people.
   function roles(ctx, ticket) {
     if (!VIEWS.includes(ctx.view)) fail('invalid', 'Choose a Requestor, Admin, or Developer view.');
     return {
-      admin: ctx.view === 'Admin',
-      dev: ctx.view === 'Developer' && (ctx.isAssignee ? ctx.isAssignee(ticket) : ticket.dev === SAMPLE_DEVELOPER),
+      admin: STAFF.includes(ctx.view),
+      dev: STAFF.includes(ctx.view),
       req: ctx.view === 'Requestor' && (!ctx.isRequester || ctx.isRequester(ticket))
     };
   }
@@ -53,7 +56,7 @@
     const task = {};
     for (const key of ['title', 'requirement', 'criteria', 'start', 'end', 'owner']) task[key] = String(input?.[key] ?? '').trim();
     if (task.title.length > 150) fail('invalid', 'Task name is too long (maximum 150 characters).');
-    if (task.owner && !owners.includes(task.owner)) fail('invalid', owners === people ? 'Choose a task owner from the sample developers.' : 'Choose a task owner from the active developers.');
+    if (task.owner && !owners.includes(task.owner)) fail('invalid', owners === people ? 'Choose a task owner from the sample developers.' : 'Choose a task owner from the active Admin and Developer accounts.');
     return task;
   }
 
@@ -114,11 +117,11 @@
         if (!d) fail('invalid', 'Choose a developer first');
         // Real accounts: ctx.developer resolves an active Developer account to { dev: name, devId }.
         const assignee = ctx.developer ? ctx.developer(d) : people.includes(d) ? { dev: d } : null;
-        if (!assignee) fail('invalid', ctx.developer ? 'Choose an active Developer account.' : 'Choose one of the sample developers.');
+        if (!assignee) fail('invalid', ctx.developer ? 'Choose an active Admin or Developer account.' : 'Choose one of the sample developers.');
         if (!PRIORITIES.includes(input.priority)) fail('invalid', 'Choose a priority.');
         Object.assign(t, assignee); t.priority = input.priority;
         if (EARLY.includes(t.status)) t.status = 'Assigned';
-        return [`Admin assigned ${t.dev}. Priority: ${t.priority}.`];
+        return [`${ctx.view} assigned ${t.dev}. Priority: ${t.priority}.`];
       }
       case 'schedule-meeting': {
         allow(dev);
@@ -297,7 +300,7 @@
     }
   }
 
-  const api = { WorkflowError, VIEWS, SAMPLE_DEVELOPER, DEPARTMENTS, CATEGORIES, PRIORITIES, CHANGE_STATUSES, validateProjectTasks, createTicket, ticketAction, createChange, changeAction };
+  const api = { WorkflowError, VIEWS, STAFF, SAMPLE_DEVELOPER, DEPARTMENTS, CATEGORIES, PRIORITIES, CHANGE_STATUSES, validateProjectTasks, createTicket, ticketAction, createChange, changeAction };
   if (typeof module !== 'undefined') module.exports = api;
   else root.WorkflowCore = api;
 })(typeof window !== 'undefined' ? window : globalThis);
