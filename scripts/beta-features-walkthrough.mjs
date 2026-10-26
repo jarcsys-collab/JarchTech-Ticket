@@ -285,7 +285,7 @@ try {
     await typeSearch(P1, 'FEATURE-WT bulk');
     check('the other tester\'s Admin view finds the same shared records', await P1.w(`document.querySelector('#result-count').textContent.startsWith('26 matching')`));
     await P1.do(`__w.view('Developer')`);
-    check('the Developer view has no developer filter', await P1.w(`!document.querySelector('#dev-filter')`));
+    check('the Developer view is staff: it has the assignee filter like Admin', await P1.w(`!!document.querySelector('#dev-filter')`));
     await P1.w(`__w.click('[data-view="Projects"]');true`); await P1.settle();
     await typeSearch(P1, 'PRJ-');
     check('Projects can be searched by project ID', await P1.w(`document.querySelectorAll('#records tr[data-id]').length>0 && [...document.querySelectorAll('#records .ticket-id')].every(e=>e.textContent.includes('PRJ-'))`));

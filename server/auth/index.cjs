@@ -122,7 +122,8 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
     }
     const userMatch = USER_PATH.exec(pathname);
     if (pathname !== '/api/v1/users' && !userMatch) return sendJson(req, res, 404, { error: 'not-found' });
-    if (user.role !== 'Admin') return sendJson(req, res, 403, { error: 'admin-only' });
+    // User and role management belongs to Developers only. Admins manage tickets, not accounts.
+    if (user.role !== 'Developer') return sendJson(req, res, 403, { error: 'developer-only' });
     if (pathname === '/api/v1/users' && !write) return sendJson(req, res, 200, { users: await store.listUsers() });
     if (pathname === '/api/v1/users' && req.method === 'POST') {
       const body = await readJson(req);

@@ -1,5 +1,5 @@
-// Optional real-browser walkthrough of My workspace: real app roles and ticket ownership, assignment to Developer
-// accounts, requested vs agreed dates, due-date reminders, role changes, disabled accounts, and separation from the
+// Optional real-browser walkthrough of My workspace: the final app roles (Developer manages users; Admin and Developer
+// manage and deliver tickets), ticket ownership, assignment to Admin or Developer accounts, requested vs agreed dates, due-date reminders, role changes, disabled accounts, and separation from the
 // beta simulation. MOCK Microsoft Entra and a temporary MongoDB only; two browser contexts, several accounts.
 // Exit codes: 0 all passed, 1 a check failed, 2 could not start, 130 cancelled. Not run by npm test or CI.
 //   npm run walkthrough:work
@@ -142,16 +142,16 @@ try {
 
   try {
     section = 'roles';
-    await signIn(P1, 1, 'Owner Admin');
-    check('the first person to sign in is a Requestor, not an Admin', await P1.w(`JARC_SESSION.role==='Requestor' && !document.querySelector('#manage-users')`));
-    await users.updateOne({ email: 'member1@jarc.example' }, { $set: { role: 'Admin' } }); // as admin:bootstrap --promote-existing does
+    await signIn(P1, 1, 'Olivia Owner');
+    check('the first person to sign in is a Requestor, with no user management', await P1.w(`JARC_SESSION.role==='Requestor' && !document.querySelector('#manage-users')`));
+    await users.updateOne({ email: 'member1@jarc.example' }, { $set: { role: 'Developer' } }); // as developer:bootstrap does
     await reload(P1);
-    check('after the owner\'s bootstrap the account is Admin, with Users and the Workspace switch', await P1.w(`JARC_SESSION.role==='Admin' && !!document.querySelector('#manage-users') && document.querySelector('#workspace-switch').value==='mine' && document.querySelector('.sidebar-bottom').textContent.includes('My workspace')`));
+    check('after the owner\'s first-Developer setup the account is Developer, with Users and the Workspace switch', await P1.w(`JARC_SESSION.role==='Developer' && !!document.querySelector('#manage-users') && document.querySelector('#workspace-switch').value==='mine' && document.querySelector('.sidebar-bottom').textContent.includes('My workspace')`));
     check('My workspace has no simulation view selector or beta banner', await P1.w(`document.querySelector('.demo-role-label').hidden && !document.querySelector('#beta-banner')`));
     await P1.w(`__w.click('#manage-users');true`);
     await waitFor(P1, `!!document.querySelector('#invite-form')`);
-    await P1.do(`__w.set('#invite-form [name=email]','member3@jarc.example');__w.set('#invite-form [name=role]','Developer');__w.submit('#invite-form')`);
-    check('an Admin invites a Developer from the Users screen', await waitFor(P1, `__w.text().includes('member3@jarc.example')`) && (await users.findOne({ email: 'member3@jarc.example' })).role === 'Developer');
+    await P1.do(`__w.set('#invite-form [name=email]','member3@jarc.example');__w.set('#invite-form [name=role]','Admin');__w.submit('#invite-form')`);
+    check('a Developer invites an Admin from the Users screen', await waitFor(P1, `__w.text().includes('member3@jarc.example')`) && (await users.findOne({ email: 'member3@jarc.example' })).role === 'Admin');
     await P1.w(`__w.esc();true`);
 
     section = 'ownership';
@@ -165,26 +165,28 @@ try {
     check('the request is saved to My workspace, owned by the signed-in person', /^JRC-2\d{3}$/.test(ticketId) && await P2.w(`fetch('/api/v1/work/tickets/${ticketId}').then(r=>r.json()).then(d=>d.tickets[0].name==='Rita Requestor')`), ticketId);
     await reload(P2);
     check('the list shows the requested date (no agreed delivery yet)', await P2.w(`document.querySelector('[data-id="${ticketId}"]').textContent.includes('Requested')`));
-    adminTicket = (await api(P1, 'POST', '/api/v1/work/tickets', { requestId: 'wt-admin-' + Date.now(), input: { title: 'WORK-WT admin own request', department: 'IT', date: today, category: 'Bug / issue', description: 'Admin request.', criteria: '' } })).json.created;
+    adminTicket = (await api(P1, 'POST', '/api/v1/work/tickets', { requestId: 'wt-admin-' + Date.now(), input: { title: 'WORK-WT owner own request', department: 'IT', date: today, category: 'Bug / issue', description: 'Admin request.', criteria: '' } })).json.created;
     await reload(P2);
     check('a Requestor never sees another person\'s ticket: list, search, or direct URL', await P2.w(`!document.querySelector('[data-id="${adminTicket}"]')`) && (await api(P2, 'GET', `/api/v1/work/search?q=${adminTicket}`)).json.total === 0 && (await api(P2, 'GET', `/api/v1/work/tickets/${adminTicket}`)).status === 404);
     await reload(P1);
-    check('the Admin sees every ticket and an unread notification for the new request', await P1.w(`!!document.querySelector('[data-id="${ticketId}"]') && Number(document.querySelector('#notice-count').textContent)>=1`));
+    check('the Developer sees every ticket and an unread staff notification for the new request', await P1.w(`!!document.querySelector('[data-id="${ticketId}"]') && Number(document.querySelector('#notice-count').textContent)>=1`));
 
     section = 'assignment';
-    await signIn(P2, 3, 'Dana Developer');
+    await signIn(P2, 3, 'Dana Admin');
     await reload(P2);
-    check('the invited Developer is active with the Developer role', await P2.w(`JARC_SESSION.role==='Developer'`));
+    check('the invited Admin is active with the Admin role and no Users button', await P2.w(`JARC_SESSION.role==='Admin' && !document.querySelector('#manage-users')`));
+    check('the Admin is refused every user-management endpoint', (await api(P2, 'GET', '/api/v1/users')).status === 403 && (await api(P2, 'POST', '/api/v1/users', { email: 'x@jarc.example', role: 'Requestor' })).status === 403 && (await api(P2, 'PATCH', `/api/v1/users/${String((await users.findOne({ email: 'member1@jarc.example' }))._id)}`, { status: 'disabled' })).status === 403);
+    check('the Admin sees every ticket, including other people\'s', await P2.w(`!!document.querySelector('[data-id="${ticketId}"]') && !!document.querySelector('[data-id="${adminTicket}"]')`));
     await reload(P1);
     await P1.do(`__w.open('${ticketId}')`);
-    check('assignment lists active Developer accounts, never sample people', await P1.w(`[...document.querySelectorAll('#assignee option')].map(o=>o.textContent).join('|')==='Choose developer|Dana Developer'`));
-    await P1.do(`__w.set('#assignee',document.querySelector('#assignee option:last-child').value);__w.set('#priority','High');__w.click('#assign')`);
-    check('the ticket is assigned to the Developer account', await P1.w(`fetch('/api/v1/work/tickets/${ticketId}').then(r=>r.json()).then(d=>d.tickets[0].dev==='Dana Developer'&&/^[0-9a-f]{24}$/.test(d.tickets[0].devId))`));
+    check('assignment lists active Admin and Developer accounts with their roles, never sample people', await P1.w(`[...document.querySelectorAll('#assignee option')].map(o=>o.textContent).join('|')==='Choose assignee|Dana Admin (Admin)|Olivia Owner (Developer)'`));
+    await P1.do(`__w.set('#assignee',[...document.querySelectorAll('#assignee option')].find(o=>o.textContent.startsWith('Dana')).value);__w.set('#priority','High');__w.click('#assign')`);
+    check('the ticket is assigned to the Admin account', await P1.w(`fetch('/api/v1/work/tickets/${ticketId}').then(r=>r.json()).then(d=>d.tickets[0].dev==='Dana Admin'&&/^[0-9a-f]{24}$/.test(d.tickets[0].devId))`));
     await P1.w(`__w.esc();true`);
     await reload(P2);
-    check('the Developer sees only assigned work (and not the Admin\'s own request)', await P2.w(`!!document.querySelector('[data-id="${ticketId}"]') && !document.querySelector('[data-id="${adminTicket}"]')`) && (await api(P2, 'GET', `/api/v1/work/tickets/${adminTicket}`)).status === 404);
-    const project = await api(P2, 'POST', `/api/v1/work/tickets/${ticketId}/actions`, { version: (await api(P2, 'GET', `/api/v1/work/tickets/${ticketId}`)).json.tickets[0].version, action: 'create-project', input: { projectName: 'WORK-WT project', requirements: 'Export payroll.', criteria: 'Totals match.', date: tomorrow, tasks: [{ title: 'Build export', requirement: 'R', criteria: 'C', start: today, end: tomorrow, owner: 'Dana Developer' }] } });
-    check('the Developer confirms scope with an agreed delivery date', project.status === 200 && project.json.tickets[0].dueDate === tomorrow, JSON.stringify(project.json && project.json.message));
+    check('the Admin assignee sees the assigned ticket', await P2.w(`!!document.querySelector('[data-id="${ticketId}"]')`));
+    const project = await api(P2, 'POST', `/api/v1/work/tickets/${ticketId}/actions`, { version: (await api(P2, 'GET', `/api/v1/work/tickets/${ticketId}`)).json.tickets[0].version, action: 'create-project', input: { projectName: 'WORK-WT project', requirements: 'Export payroll.', criteria: 'Totals match.', date: tomorrow, tasks: [{ title: 'Build export', requirement: 'R', criteria: 'C', start: today, end: tomorrow, owner: 'Dana Admin' }] } });
+    check('the Admin does delivery work: confirms scope with an agreed delivery date', project.status === 200 && project.json.tickets[0].dueDate === tomorrow, JSON.stringify(project.json && project.json.message));
     await reload(P2);
     check('the list shows the agreed delivery date with a due-soon label', await P2.w(`document.querySelector('[data-id="${ticketId}"] .deadline.due-soon')?.textContent==='Due in 1 day'`));
     check('the attention summary counts work due soon', await P2.w(`document.querySelector('[data-attention="Due soon"] strong').textContent==='1'`));
@@ -199,7 +201,7 @@ try {
     await reload(P2);
     await P2.w(`__w.click('#notifications');true`);
     await waitFor(P2, `!!document.querySelector('.notification')`);
-    check('the server scheduler sends the Developer a due-date reminder', await P2.w(`[...document.querySelectorAll('.notification')].some(n=>n.textContent.includes('Delivery due in 1 day')&&n.textContent.includes('Automatic reminder'))`));
+    check('the server scheduler sends the assignee (an Admin) a due-date reminder', await P2.w(`[...document.querySelectorAll('.notification')].some(n=>n.textContent.includes('Delivery due in 1 day')&&n.textContent.includes('Automatic reminder'))`));
     check('the panel says email is not enabled', await P2.w(`__w.text().includes('not enabled, so notifications are in-app only')`));
     await P2.w(`__w.esc();__w.click('#settings');true`);
     await waitFor(P2, `!!document.querySelector('#prefs-form')`);
@@ -213,19 +215,20 @@ try {
     check('switching to Beta simulation shows the beta banner and the Simulation view selector', await P2.w(`!!document.querySelector('#beta-banner') && !document.querySelector('.demo-role-label').hidden && JARC_SERVER.simulated`));
     await P2.do(`__w.view('Admin')`);
     check('the simulated Admin view shows only beta test records', await P2.w(`!document.querySelector('[data-id="${ticketId}"]') && !document.querySelector('[data-id="${adminTicket}"]') && !!document.querySelector('[data-id="JRC-1042"]')`));
-    check('a simulated Admin view gives no access to My workspace', (await api(P2, 'GET', `/api/v1/work/tickets/${adminTicket}`)).status === 404 && (await api(P2, 'GET', '/api/v1/users')).status === 403);
+    await P2.do(`__w.view('Developer')`);
+    check('a simulated Developer view gives no user management and changes no real role', (await api(P2, 'GET', '/api/v1/users')).status === 403 && (await users.findOne({ email: 'member3@jarc.example' })).role === 'Admin');
     await P2.w(`__w.set('#workspace-switch','mine');true`);
     await sleep(800); await reload(P2);
-    check('switching back returns to My workspace as the real Developer', await P2.w(`!JARC_SERVER.simulated && JARC_SESSION.role==='Developer' && !!document.querySelector('[data-id="${ticketId}"]')`));
+    check('switching back returns to My workspace as the real Admin', await P2.w(`!JARC_SERVER.simulated && JARC_SESSION.role==='Admin' && !document.querySelector('#manage-users') && !!document.querySelector('[data-id="${ticketId}"]')`));
 
     section = 'role changes';
     const devId = String((await users.findOne({ email: 'member3@jarc.example' }))._id);
-    check('an Admin changes the role from the Users screen', (await api(P1, 'PATCH', `/api/v1/users/${devId}`, { role: 'Requestor' })).status === 200);
+    check('a Developer changes the role through user management', (await api(P1, 'PATCH', `/api/v1/users/${devId}`, { role: 'Requestor' })).status === 200);
     await P2.w(`document.dispatchEvent(new Event('visibilitychange'));true`);
     await sleep(1500); await P2.settle(); await waitFor(P2, `!!window.JARC_SERVER && JARC_SERVER.ready`);
-    check('the open page reloads with the new role, and the assignment disappears', await P2.w(`JARC_SESSION.role==='Requestor' && !document.querySelector('[data-id="${ticketId}"]')`));
+    check('the open page reloads with the new role, and the ticket disappears', await P2.w(`JARC_SESSION.role==='Requestor' && !document.querySelector('[data-id="${ticketId}"]')`));
     check('the server refuses the old role at once', (await api(P2, 'GET', `/api/v1/work/tickets/${ticketId}`)).status === 404);
-    check('an Admin cannot change their own role (the last Admin stays)', (await api(P1, 'PATCH', `/api/v1/users/${String((await users.findOne({ email: 'member1@jarc.example' }))._id)}`, { role: 'Requestor' })).status === 403);
+    check('a Developer cannot change their own role (the last active Developer stays)', (await api(P1, 'PATCH', `/api/v1/users/${String((await users.findOne({ email: 'member1@jarc.example' }))._id)}`, { role: 'Requestor' })).status === 403);
     check('disabling the account signs it out everywhere', (await api(P1, 'PATCH', `/api/v1/users/${devId}`, { status: 'disabled' })).status === 200 && (await api(P2, 'GET', '/api/v1/work/workspace')).status === 401);
     await P1.shot('work-1-admin.png');
     check('no page errors in either context', P1.cdp.errors.length === 0 && P2.cdp.errors.length === 0, [...P1.cdp.errors, ...P2.cdp.errors].join(' | '));

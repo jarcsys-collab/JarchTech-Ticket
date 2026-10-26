@@ -323,8 +323,9 @@ test('search: combined filters, pagination, visibility, and validation over all 
   // Requestor view: own requests plus the shared samples; never another member's requests.
   const asB = await search(B, { view: 'Requestor', q: 'FINDME' });
   assert.deepEqual(asB.json.items.map(t => t.id), [ids.b1]);
-  const devView = (await search(B, { view: 'Developer' })).json;
-  assert.ok(devView.items.every(t => t.dev === 'Miguel Santos'));
+  // Admin and Developer views are both staff and list every shared record.
+  const devView = (await search(B, { view: 'Developer', pageSize: 50 })).json, adminView = (await search(B, { view: 'Admin', pageSize: 50 })).json;
+  assert.equal(devView.total, adminView.total);
   // Projects scope searches project IDs and names.
   const projects = (await search(B, { view: 'Admin', scope: 'projects', q: 'PRJ-' })).json;
   assert.ok(projects.total >= 1 && projects.items.every(t => t.project));

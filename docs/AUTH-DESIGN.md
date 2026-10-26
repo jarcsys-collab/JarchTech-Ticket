@@ -57,7 +57,7 @@ An explicit, separately switchable beta option. Signed-in people can preview the
 - **Demo mode:** demo is also the default when `AUTH_MODE` is unset **locally**. Entra settings without `AUTH_MODE`, or demo mode when deployed, stop the server at start-up.
 - **Access requests:** there is no "request access" queue (invite-only). Denied sign-ins are recorded as `signin.denied` events.
 - **Last Admin:** through the API, Admins cannot change themselves, so an active Admin always remains. The last-Admin rule is also enforced in the data layer, as a backstop for concurrent changes.
-- **Users screen:** opened from a **Users** button in the header (Admins only), not from an avatar menu. The sidebar still has only Tickets and Projects.
+- **Users screen:** opened from a **Users** button in the header (Developers only, in the final role model), not from an avatar menu. The sidebar still has only Tickets and Projects.
 - **Front-channel logout:** not implemented. Sign-out uses Entra's end-session endpoint.
 - **Database setup:** collections and indexes are created only by `npm run db:setup`; the server checks them read-only in `/readyz` (`schema-missing`).
 
@@ -108,7 +108,7 @@ A person needs **both**. Gate 1 stops sign-in at Microsoft. Gate 2 means that ev
 
 **Role changes:** only an Admin can make them, through `PATCH /api/v1/users/:id`, and each one is written to `events` with who changed what and when.
 - Admins cannot change their own role or disable themselves.
-- The last active Admin cannot be demoted or disabled.
+- The last active Developer cannot be demoted or disabled (final role model: Developers manage users; Admins manage tickets).
 - A role is never set from a sign-in claim or a request field other than this admin action.
 
 **`sessions`**
@@ -125,7 +125,7 @@ A person needs **both**. Gate 1 stops sign-in at Microsoft. Gate 2 means that ev
 The first admin is created deliberately, not automatically: a one-time command run by the owner against the target database:
 
 ```text
-npm run admin:bootstrap -- --email <work-email>
+npm run developer:bootstrap -- --email <work-email>   # replaced admin:bootstrap; see README
 ```
 
 It creates an `invited` Admin record and refuses to run if any active Admin already exists. That person becomes active on their first Microsoft sign-in. There are no default accounts or passwords. The command reads the database settings from `.env` or the environment, like the server.

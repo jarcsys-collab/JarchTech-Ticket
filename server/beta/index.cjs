@@ -3,7 +3,8 @@
 // - The simulated view (Requestor, Admin, Developer) is chosen per request and only ever applies to these beta
 //   collections. It never changes real roles, never reaches My workspace records, and never emails anyone.
 // - Every member reads the whole shared workspace (test data); requestor actions apply to the member's own requests
-//   and the shared sample requests; the Developer view acts as the first sample developer.
+//   and the shared sample requests. Admin and Developer views both manage and deliver work, as the real roles do;
+//   the simulation never manages real accounts (the Developer view is labelled with the first sample developer).
 // The request handling itself is the shared engine in server/workspace/engine.cjs.
 const WorkflowCore = require('../../public/workflow-core.js');
 const SampleData = require('../../public/sample-data.js');
@@ -53,10 +54,9 @@ const policy = {
   // Shared test data: every signed-in beta member sees every beta record.
   visible: async () => ({}),
   canSee: async () => true,
-  // Lists follow the simulated view, as the Requestor, Admin, and Developer screens do.
+  // Lists follow the simulated view: Admin and Developer (staff) see every beta record; Requestor sees own and sample requests.
   searchScope: async (user, params) => {
     const v = view(params.get('view'));
-    if (v === 'Developer') return { dev: WorkflowCore.SAMPLE_DEVELOPER };
     if (v === 'Requestor') return { $or: [{ 'requester.sample': true }, { 'requester.id': String(user._id) }] };
     return {};
   },

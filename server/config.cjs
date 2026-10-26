@@ -132,7 +132,7 @@ function readDatabase(env, { required, problems }) {
   return { uri, name };
 }
 
-// Database settings only, for the db:setup and admin:bootstrap commands. Both settings are required.
+// Database settings only, for the db:setup, developer:bootstrap, and beta:seed commands. Both settings are required.
 function loadDatabaseConfig(env = process.env) {
   const problems = [];
   const database = readDatabase(env, { required: true, problems });

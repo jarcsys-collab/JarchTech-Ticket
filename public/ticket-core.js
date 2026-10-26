@@ -82,7 +82,8 @@
   }
 
   function visibleTickets(tickets, role, developer = DEMO_DEVELOPER, requestor = DEMO_REQUESTOR) {
-    return tickets.filter(t => role === 'Admin' || (role === 'Developer' ? t.dev === developer : t.name === requestor));
+    // Admins and Developers (staff) see every ticket; Requestors see their own. developer is kept for older callers.
+    return tickets.filter(t => role === 'Admin' || role === 'Developer' || t.name === requestor);
   }
 
   function progress(t) {

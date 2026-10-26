@@ -78,7 +78,7 @@ try {
   db = mongo.db('jarctech_auth_screens');
   await ensureSchema(db);
   const store = createStore(db);
-  await store.inviteUser({ email: 'owner@jarc.example', role: 'Admin', displayName: 'Olivia Owner' }, null);
+  await store.inviteUser({ email: 'owner@jarc.example', role: 'Developer', displayName: 'Olivia Owner' }, null);
   await store.inviteUser({ email: 'rita@jarc.example', role: 'Requestor', displayName: 'Rita Requestor' }, null);
   entra = await startMockEntra({ tenantId: TENANT, clientId: CLIENT, clientSecret: 'screens-check-client-secret' });
   const port = await freePort(), debug = await freePort();
@@ -92,7 +92,7 @@ try {
   const betaDb = mongo.db('jarctech_auth_screens_beta');
   await ensureSchema(betaDb);
   const betaStore = createStore(betaDb);
-  await betaDb.collection('users').insertOne({ email: 'boss@jarc.example', role: 'Admin', status: 'active', displayName: 'Bea Boss', tenantId: TENANT, entraObjectId: account(31).oid, createdAt: new Date(), updatedAt: new Date() });
+  await betaDb.collection('users').insertOne({ email: 'boss@jarc.example', role: 'Developer', status: 'active', displayName: 'Bea Boss', tenantId: TENANT, entraObjectId: account(31).oid, createdAt: new Date(), updatedAt: new Date() });
   const betaAdmin = await betaDb.collection('users').findOne({ email: 'boss@jarc.example' });
   await betaStore.inviteUser({ email: 'devon@jarc.example', role: 'Developer', displayName: 'Devon Developer' }, betaAdmin);
   await betaDb.collection('users').insertOne({ email: 'dora@jarc.example', role: 'Requestor', status: 'disabled', displayName: 'Dora Disabled', tenantId: TENANT, entraObjectId: account(34).oid, createdAt: new Date(), updatedAt: new Date() });
@@ -123,6 +123,21 @@ try {
     await nav(`${origin}/`);
     check('opening the app without a session shows the sign-in page', await here() === '/auth/signin' && await js(`document.body.textContent.includes('Sign in with Microsoft')`));
     await shot('01-sign-in.png');
+    // The sign-in card is centered in the whole viewport (no sidebar offset) on desktop and phones, and a short screen scrolls.
+    const card = () => js(`(()=>{const r=document.querySelector('.auth-card').getBoundingClientRect(),s=getComputedStyle(document.querySelector('.auth-card'));return {dx:Math.round(r.left+r.width/2-innerWidth/2),dy:Math.round(r.top+r.height/2-innerHeight/2),left:Math.round(r.left),right:Math.round(innerWidth-r.right),pad:s.paddingLeft,scroll:document.documentElement.scrollHeight>innerHeight,width:Math.round(r.width)}})()`);
+    const desktop = await card();
+    check('sign-in card is centered horizontally and vertically on desktop', Math.abs(desktop.dx) <= 1 && Math.abs(desktop.dy) <= 1 && desktop.pad === '36px', JSON.stringify(desktop));
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await sleep(300);
+    const phone = await card();
+    check('on a phone the card is centered with 16px side spacing and its own padding', Math.abs(phone.dx) <= 1 && Math.abs(phone.dy) <= 1 && phone.left === 16 && phone.right === 16 && phone.pad === '22px', JSON.stringify(phone));
+    await shot('01b-sign-in-phone.png');
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 240, deviceScaleFactor: 1, mobile: true });
+    await sleep(300);
+    const short = await js(`(()=>{const r=document.querySelector('.auth-card').getBoundingClientRect();return {top:Math.round(r.top+scrollY),scroll:document.documentElement.scrollHeight>innerHeight}})()`);
+    check('on a short screen the page scrolls and the top of the card stays visible', short.scroll && short.top >= 16, JSON.stringify(short));
+    await send('Emulation.clearDeviceMetricsOverride');
+    await sleep(300);
     // Existing browser records on this origin must survive sign-in untouched.
     const stored = JSON.stringify({ tickets: [{ id: 'JRC-7001', title: 'Existing local record', name: 'Rita Requestor', department: 'Sales', category: 'Enhancement', date: '2026-12-01', priority: 'Low', status: 'Submitted', dev: '', description: 'Kept.', criteria: 'Kept.', tasks: [], history: [] }], changes: [], notices: [] });
     await js(`localStorage.setItem('jarc-helpdesk-v1', ${JSON.stringify(stored)}); true`);
@@ -157,15 +172,15 @@ try {
 
     entra.signInNext(account(1, 'Olivia Owner', 'owner@jarc.example'));
     await clickAndLoad('a.primary');
-    check('invited Admin lands in the app with the Users button', await here() === '/' && await js(`!!document.querySelector('#manage-users') && document.querySelector('.signed-in-as').textContent==='Olivia Owner · Admin'`));
+    check('invited Developer lands in the app with the Users button', await here() === '/' && await js(`!!document.querySelector('#manage-users') && document.querySelector('.signed-in-as').textContent==='Olivia Owner · Developer'`));
     await js(`document.querySelector('#manage-users').click(); true`); await sleep(600);
     check('Users screen lists people with their access', await js(`document.querySelector('.users-table').textContent.includes('rita@jarc.example') && document.querySelector('.users-table').textContent.includes('You')`));
     await js(`{const f=document.querySelector('#invite-form');f.querySelector('[name=email]').value='dev@jarc.example';f.querySelector('[name=displayName]').value='Dana Developer';f.querySelector('[name=role]').value='Developer';f.requestSubmit()} true`); await sleep(800);
     const dana = await db.collection('users').findOne({ email: 'dev@jarc.example' });
-    check('Admin can invite someone; they are listed as invited', dana?.status === 'invited' && await js(`[...document.querySelectorAll('.users-table tr')].some(r=>r.textContent.includes('dev@jarc.example') && r.querySelector('select[data-field=status]').selectedOptions[0].textContent==='Invited (not signed in yet)')`));
+    check('a Developer can invite someone; they are listed as invited', dana?.status === 'invited' && await js(`[...document.querySelectorAll('.users-table tr')].some(r=>r.textContent.includes('dev@jarc.example') && r.querySelector('select[data-field=status]').selectedOptions[0].textContent==='Invited (not signed in yet)')`));
     await shot('06-users-screen.png');
     await js(`{const s=document.querySelector('select[data-user="${dana._id}"][data-field="status"]');s.value='disabled';s.dispatchEvent(new Event('change'))} true`); await sleep(800);
-    check('Admin can revoke a pending invitation', (await db.collection('users').findOne({ email: 'dev@jarc.example' })).status === 'disabled');
+    check('a Developer can revoke a pending invitation', (await db.collection('users').findOne({ email: 'dev@jarc.example' })).status === 'disabled');
     const ritaId = String((await db.collection('users').findOne({ email: 'rita@jarc.example' }))._id);
     await js(`{const s=document.querySelector('select[data-user="${ritaId}"][data-field="role"]');s.value='Developer';s.dispatchEvent(new Event('change'))} true`); await sleep(800);
     check('Admin role change is saved on the server', (await db.collection('users').findOne({ email: 'rita@jarc.example' })).role === 'Developer');
@@ -204,12 +219,12 @@ try {
     check('beta: no accounts were created for refused sign-ins', await betaUsers.countDocuments({ email: { $in: ['gail@partner.example', 'pat@outlook.example', 'otto@other.example'] } }) === 0 && await betaUsers.countDocuments({ email: 'dora@jarc.example' }) === 1);
 
     await signInAs(account(38, 'Devon Developer', 'devon@jarc.example'));
-    check('beta: an Admin-invited Developer keeps the Developer role', await js(`document.querySelector('.signed-in-as').textContent==='Devon Developer · Developer'`) && (await betaUsers.findOne({ email: 'devon@jarc.example' })).role === 'Developer');
+    check('beta: a Developer-invited Developer keeps the Developer role', await js(`document.querySelector('.signed-in-as').textContent==='Devon Developer · Developer'`) && (await betaUsers.findOne({ email: 'devon@jarc.example' })).role === 'Developer');
     await signOutBeta();
 
     await signInAs(account(31, 'Bea Boss', 'boss@jarc.example'));
     await js(`document.querySelector('#manage-users').click(); true`); await sleep(600);
-    check('beta: the Admin Users screen explains the beta access policy and lists auto-admitted members', await js(`document.querySelector('.drawer').textContent.includes('Beta access: every member account of the company tenant can sign in and starts as a Requestor') && document.querySelector('.users-table').textContent.includes('mia@jarc.example')`));
+    check('beta: the Developer Users screen explains the beta access policy and lists auto-admitted members', await js(`document.querySelector('.drawer').textContent.includes('Beta access: every member account of the company tenant can sign in and starts as a Requestor') && document.querySelector('.users-table').textContent.includes('mia@jarc.example')`));
     await shot('14-beta-users-screen.png');
 
     check('no page errors', errors.length === 0, errors.join(' | '));

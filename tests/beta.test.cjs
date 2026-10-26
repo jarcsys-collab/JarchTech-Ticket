@@ -121,7 +121,9 @@ test('views are checked on the server and never grant access outside the beta wo
   assert.equal((await act(A, 'tickets', 'JRC-1043', 'assign', 'Requestor', { dev: 'Miguel Santos', priority: 'High' })).status, 403);
   assert.equal((await act(A, 'tickets', 'JRC-1043', 'status', 'Admin', { status: 'Closed' })).status, 409, 'invalid transition');
   assert.equal((await act(A, 'tickets', 'JRC-1043', 'assign', 'Admin', { dev: 'Someone Real', priority: 'High' })).status, 400, 'sample developers only');
-  assert.equal((await act(A, 'tickets', 'JRC-1041', 'create-project', 'Developer', {})).status, 403, 'JRC-1041 is assigned to another sample developer');
+  // Admin and Developer views are both staff: delivery work is allowed in either (the input is still validated).
+  assert.equal((await act(A, 'tickets', 'JRC-1041', 'create-project', 'Admin', {})).status, 400, 'staff view may deliver; empty scope refused');
+  assert.equal((await act(A, 'tickets', 'JRC-1041', 'create-project', 'Requestor', {})).status, 403, 'the Requestor view may not');
   assert.equal((await act(B, 'tickets', 'JRC-1043', 'reason', 'Requestor', { status: 'Cancelled', reason: 'Not mine' })).status, 403, 'only the requester (or sample requests) in Requestor view');
   // Real roles and real APIs are unaffected by simulated views.
   assert.equal((await call('/api/v1/users', { cookie: A })).status, 403);

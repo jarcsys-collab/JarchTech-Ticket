@@ -22,14 +22,14 @@ function wireAttention() {
 }
 function filterBar() {
   const select = (key, all, label, values) => `<select id="${key}-filter" data-filter="${key}" aria-label="Filter by ${label}"><option value="">${all}</option>${values.map(v => { const [value, text] = Array.isArray(v) ? v : [v, v]; return `<option value="${esc(value)}" ${filters[key] === value ? 'selected' : ''}>${esc(text)}</option>`; }).join('')}</select>`;
-  // My workspace filters by Developer account; the simulation and local modes by sample developer name.
+  // My workspace filters by assignee account (Admin or Developer); the simulation and local modes by sample name.
   const devValues = accounts ? [ListFilter.UNASSIGNED, ...(server.developers || []).map(d => [d.id, d.name])] : ListFilter.CHOICES.dev;
   return `<input class="search" type="search" data-filter="q" maxlength="${ListFilter.MAX_QUERY}" aria-label="Search by ID, summary, or description" placeholder="Search ${view === 'Projects' ? 'project or ticket ID' : 'ticket ID'}, summary, description…" value="${esc(filters.q)}">`
     + select('status', 'All statuses', 'status', ListFilter.CHOICES.status)
     + select('priority', 'All priorities', 'priority', ListFilter.CHOICES.priority)
     + select('department', 'All departments', 'department', ListFilter.CHOICES.department)
     // The Developer view only lists the sample developer's own work, so a developer filter would not apply.
-    + (role === 'Developer' ? '' : select('dev', 'All developers', accounts ? 'assigned developer' : 'assigned sample developer', devValues))
+    + (role === 'Requestor' && accounts ? '' : select('dev', 'All assignees', accounts ? 'assignee' : 'assigned sample developer', devValues))
     + select('attention', 'Any deadline', 'deadline or decision', ListFilter.CHOICES.attention)
     + `<button type="button" class="secondary" id="clear-filters" ${ListFilter.activeCount(filters) ? '' : 'disabled'}>Clear filters</button>`;
 }
@@ -93,7 +93,7 @@ function showList(r) {
       : '<div class="empty">No records here yet. New work will appear as you move through the workflow.</div>';
     if ($('#empty-clear')) $('#empty-clear').onclick = () => { resetListFilters(); render(); $('.search').focus(); };
   } else {
-    el.innerHTML = `<div class="group-title">⌄ &nbsp; ${view === 'Projects' ? 'Projects' : role === 'Admin' ? 'All requestor tickets' : 'My ticket'} <small>${total} records</small></div><div class="table-wrap"><table><thead><tr><th>${view === 'Projects' ? 'PROJECT / REQUEST' : 'REQUEST'}</th><th>STATUS</th><th>PRIORITY</th><th>ASSIGNEE</th><th>DELIVERY DATE</th><th>PROGRESS</th></tr></thead><tbody>${items.map(t => `<tr data-id="${esc(t.id)}" tabindex="0"><td><span class="ticket-name">${esc(view === 'Projects' ? (t.projectName || t.title) : t.title)}</span><span class="ticket-id">${view === 'Projects' ? esc(t.project) + ' · ' : ''}${esc(t.id)} &nbsp; · &nbsp; ${esc(t.department)}</span></td><td>${pill(t.status)}</td><td>${pill(t.priority)}</td><td>${person(t.dev)}</td><td>${DeadlineCore.dueDate(t) ? dueText(t) : `<span class="requested">Requested ${esc(DeadlineCore.formatDate(DeadlineCore.requestedDate(t)))}</span>`}</td><td>${prog(t)}</td></tr>`).join('')}</tbody></table></div>`;
+    el.innerHTML = `<div class="group-title">⌄ &nbsp; ${view === 'Projects' ? 'Projects' : canAdmin() ? 'All requestor tickets' : 'My ticket'} <small>${total} records</small></div><div class="table-wrap"><table><thead><tr><th>${view === 'Projects' ? 'PROJECT / REQUEST' : 'REQUEST'}</th><th>STATUS</th><th>PRIORITY</th><th>ASSIGNEE</th><th>DELIVERY DATE</th><th>PROGRESS</th></tr></thead><tbody>${items.map(t => `<tr data-id="${esc(t.id)}" tabindex="0"><td><span class="ticket-name">${esc(view === 'Projects' ? (t.projectName || t.title) : t.title)}</span><span class="ticket-id">${view === 'Projects' ? esc(t.project) + ' · ' : ''}${esc(t.id)} &nbsp; · &nbsp; ${esc(t.department)}</span></td><td>${pill(t.status)}</td><td>${pill(t.priority)}</td><td>${person(t.dev)}</td><td>${DeadlineCore.dueDate(t) ? dueText(t) : `<span class="requested">Requested ${esc(DeadlineCore.formatDate(DeadlineCore.requestedDate(t)))}</span>`}</td><td>${prog(t)}</td></tr>`).join('')}</tbody></table></div>`;
     el.querySelectorAll('[data-id]').forEach(x => {
       const openRecord = () => view === 'Projects' ? projectView(x.dataset.id) : detail(x.dataset.id);
       x.onclick = openRecord;

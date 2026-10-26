@@ -7,8 +7,10 @@ function page({ title, heading, message, action = '', note = '' }) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · JarcTech Ticket</title><link rel="stylesheet" href="/style.css">
 <style>
-body.auth-page{min-height:100vh;display:grid;place-items:center;background:linear-gradient(155deg,#068e94,#007d85);padding:24px}
-.auth-card{background:#fff;border-radius:17px;padding:38px 36px;width:min(460px,100%);box-shadow:0 20px 50px #0b3f4433}
+/* Centered in the whole viewport. The card is a <main>, so the app layout rules for main (sidebar offset and side padding) are reset here. */
+body.auth-page{min-height:100vh;min-height:100dvh;margin:0;display:grid;place-items:center;background:linear-gradient(155deg,#068e94,#007d85);padding:24px}
+body.auth-page main.auth-card{margin:0;max-width:none;background:#fff;border-radius:17px;padding:38px 36px;width:min(460px,100%);box-shadow:0 20px 50px #0b3f4433}
+@media(max-width:720px){body.auth-page{padding:16px}body.auth-page main.auth-card{padding:28px 22px}}
 .auth-brand{display:flex;align-items:center;gap:12px;font-size:22px;font-weight:750;color:#008d95;margin-bottom:26px}
 .auth-brand .brandmark{background:#009fa7;color:#fff;width:42px;height:42px;font-size:24px;border-radius:13px}
 .auth-brand small{display:block;font-size:11px;font-weight:400;color:#859297;margin-top:2px}

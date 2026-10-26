@@ -80,10 +80,10 @@ There are two modes, chosen with `AUTH_MODE`:
 
 **Rules in both policies:**
 - **Refused:** guests (B2B accounts from other organizations), personal Microsoft accounts, accounts from any other tenant, and disabled users all get an "Access not granted" page, and no account is created. Admins can see refused attempts in the sign-in log.
-- **Roles never come from Microsoft.** Admin and Developer are given only by a JarcTech Admin on the Users screen, or by an invitation that names that role. Role, group, and directory-role claims are ignored, as is anything sent by the browser.
+- **Roles never come from Microsoft.** Admin and Developer are given only by a JarcTech Developer on the Users screen, by an invitation that names that role, or by the owner's one-time `developer:bootstrap`. Role, group, and directory-role claims are ignored, as is anything sent by the browser.
 - **Existing records win.** An invitation keeps its role on first sign-in. Roles an Admin set are kept on later sign-ins and never reset to Requestor. A disabled or revoked person stays locked out: beta access never creates a replacement account for a disabled email.
 - **One account per Microsoft account.** The account is permanently linked to the person's Entra object ID. If an email is already linked to a different Microsoft account, sign-in is refused for an Admin to resolve.
-- **Restoring invite-only:** remove `ACCESS_POLICY` (or set it to `invite-only`) and restart. Auto-admitted Requestors keep their accounts; an Admin can disable any of them on the Users screen.
+- **Restoring invite-only:** remove `ACCESS_POLICY` (or set it to `invite-only`) and restart. Auto-admitted Requestors keep their accounts; a Developer can disable any of them on the Users screen.
 
 For the beta, the app registration's enterprise application must have **Assignment required = No**. Otherwise Entra itself blocks members who are not individually assigned.
 
@@ -91,7 +91,7 @@ For the beta, the app registration's enterprise application must have **Assignme
 - `Requestor`, `Admin` and `Developer` are stored on the server and read on every request.
 - Any role in the browser (query string, header, cookie, or devtools) is ignored by the server.
 - In signed-in mode the Demo role selector is hidden. The header shows the signed-in name, role, and **Sign out**; Admins also get a **Users** button for invitations, role changes, and disabling access.
-- Admins cannot change their own role or access, and the last active Admin cannot be removed.
+- Nobody can change their own role or access, and the last active Developer cannot be removed.
 
 **Sessions:**
 - Stored server-side in MongoDB. Only a hash of each session token is stored.
@@ -103,7 +103,7 @@ For the beta, the app registration's enterprise application must have **Assignme
 >
 > **Protected by the server:**
 > - who can open the app (Microsoft sign-in plus admission policy)
-> - app roles, sessions, and user management (Admins only)
+> - app roles, sessions, and user management (Developers only)
 > - **My workspace tickets**: ownership, assignment, and every read and write (see below)
 >
 > **Not yet production-ready:** no security review or penetration test has been done; attachments are not malware-scanned; audit history covers sign-in, user changes, and beta resets, with ticket activity kept on each ticket.
@@ -116,16 +116,16 @@ With sign-in on, **My workspace** is the main view. Its tickets, projects, comme
 
 | App role | Can see and act on |
 | --- | --- |
-| **Requestor** (default for every newly admitted member) | Their own requests and the projects, comments, attachments, and notifications that belong to them |
-| **Developer** | Work assigned to their account, and their own requests |
-| **Admin** | Everything in My workspace; assigns work to **active Developer accounts**; manages users |
+| **Requestor** (default for every newly admitted member) | Their own requests and the projects, comments, attachments, and notifications that belong to them: submit, track, comment, confirm meetings, accept delivery or return it for correction |
+| **Admin** | Every ticket: review, prioritize, assign, request information, reject, hold, and close; and the delivery work (planning meetings, scope, projects, tasks and dates, acceptance requests, release). **No user management.** |
+| **Developer** (highest role) | Everything an Admin can do, plus **exclusive** user and role management: invite people, assign and revoke roles, enable and disable accounts |
 
 - **The server derives everything:** ownership comes from the session, never from the browser, and so do the roles and view. Another person's records answer *not found* in every route: lists, search, direct ticket URLs, actions, linked changes, attachment downloads, the activity feed, and notifications.
-- **Capacities:** a member acts in each capacity they hold on a ticket: Admin by role, Developer when assigned, Requestor as its owner. For example, an Admin who submits a request can also accept it.
-- **Assignment:** the developer list shows active Developer accounts only, never sample people. Work assigned to someone who later loses the Developer role or is disabled stays visible to Admins for reassignment.
-- **Role and access changes:** an Admin changes roles and access on the **Users** screen.
+- **Capacities:** Admins and Developers act as staff on every ticket. The owner of a request also acts as its Requestor, so a staff member who submits a request can also accept it.
+- **Assignment:** the assignee list shows active Admin and Developer accounts (with their role), never sample people. Delivery reminders go to the assignee; escalations go to the shared staff inbox read by every Admin and Developer. Work assigned to someone who later becomes a Requestor or is disabled stays visible to staff for reassignment.
+- **Role and access changes:** a Developer changes roles and access on the **Users** screen. The server refuses every user-management request from anyone else, including Admins and simulated views.
   - They apply at once. Disabling an account ends its sessions, and an open page reloads with the new role when the person returns to it.
-  - Admins cannot change their own role or access, and the last active Admin can never be demoted or disabled.
+  - Nobody can change their own role or access, and the last active Developer can never be demoted or disabled, even when two Developers change each other at the same moment.
 - **Numbering:** My workspace tickets are numbered from `JRC-2001` (changes from `CR-501`), apart from the beta simulation's numbers.
 - **Simulation is separate:** the header's **Workspace** switch chooses **My workspace** or **Beta simulation** (when enabled). Simulated views and sample people never grant anything in My workspace, and beta records are never converted into real tickets.
 
@@ -191,15 +191,14 @@ Both commands read the same `.env` and print the target database name. They refu
 
 ```powershell
 npm.cmd run db:setup -- --confirm-db jarctech_ticket_dev
-npm.cmd run admin:bootstrap -- --email <first-admin-work-email> --confirm-db jarctech_ticket_dev
-npm.cmd run admin:bootstrap -- --email <existing-member-email> --confirm-db jarctech_ticket_dev --promote-existing
+npm.cmd run developer:bootstrap -- --email <work-email-of-someone-who-has-signed-in> --confirm-db jarctech_ticket_dev
 ```
 
 - **`db:setup`** creates the sign-in (`users`, `sessions`, `events`), My workspace, reminder, email outbox, and beta collections with validators and indexes. It creates no users and is safe to re-run. Until it has run, `/readyz` reports `schema-missing`; the server itself never creates collections.
-- **`admin:bootstrap`** creates one `invited` Admin for that work email. The person becomes active on their first Microsoft sign-in with that email. Everyone else is invited from the **Users** screen, where Admins can also revoke a pending invitation.
-  - It always refuses once an Admin is active. **Nobody ever becomes Admin by signing in**, including the first person.
-  - If the person already has an account (for example they were admitted as a Requestor under `tenant-members`), use `--promote-existing`. It promotes that active, signed-in account to Admin, applies at once, and is recorded in the audit log.
-  - If the only Admin is a pending invitation (for example after a mistyped email), rerun it with `--replace-invitation`. This revokes the pending invitation and creates the new one. It never touches an Admin who has signed in.
+- **`developer:bootstrap`** makes the first Developer. **Nobody ever gains a role by signing in**, including the first person.
+  - The person signs in once (under `tenant-members` they start as a Requestor). The command then promotes that active, signed-in account. The privilege is bound to the account's permanent Microsoft object ID: the email only finds the account, and the change applies only if it still has the same identity. Add `--object-id <id>` to require an exact identity. It applies at once and is recorded in the audit log.
+  - Under `invite-only`, where nobody can sign in uninvited, `--invite` creates one Developer invitation, bound to the person's Microsoft identity at their first sign-in.
+  - It always refuses once an active Developer exists. Everyone else is invited and managed from the **Users** screen by a Developer.
 
 Then start with `npm.cmd start` and open http://localhost:4177. You'll see the sign-in page.
 
@@ -367,7 +366,7 @@ It never contacts Microsoft or Atlas and never reads `.env`. Ports are chosen au
 - the pre-filled, read-only Requestor name
 - that a Requestor cannot use the admin API
 - sign-out
-- the Admin Users screen: invite, revoke, and role change
+- the Developer Users screen: invite, revoke, and role change; the sign-in card centered on desktop and phone
 - a second scenario with `ACCESS_POLICY=tenant-members` (beta): a member joins as Requestor, Admin claims are ignored, guests, personal accounts, other tenants and disabled members are refused, an invited Developer keeps the role, and the Users screen explains the policy
 
 Ports are chosen automatically. It uses a temporary browser profile and cleans up after success, failure, or Ctrl+C. Set `AUTH_CHECK_SCREENSHOTS` to a folder (for example `tmp/auth`) to save screenshots. It is not part of `npm test` or GitHub Actions.
@@ -409,13 +408,13 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `server/auth/oidc.cjs` | Microsoft Entra OpenID Connect (code flow with PKCE, state, nonce, and ID token signature checks) via `openid-client` |
 | `server/auth/store.cjs` | Admission rules, invitations, role changes, server-side sessions, and the audit log |
 | `server/auth/pages.cjs`, `server/auth/tokens.cjs` | Sign-in, access-denied, signed-out, and error pages; random tokens and the encrypted sign-in flow cookie |
-| `public/auth-client.js` | Signed-in mode only: header name and role, Sign out, the Admin Users screen, and the inspection controls and banner |
+| `public/auth-client.js` | Signed-in mode only: header name and role, Sign out, the Developer Users screen, and the inspection controls and banner |
 | `public/inspection.js` | Beta inspection mode (sent only when `INSPECTION_MODE=enabled`): preview view, isolated sample-data storage, exit, and reset |
 | `public/workflow-core.js` | Ticket, project, and linked-change workflow rules (view and status checks), shared by the browser and the server |
 | `public/sample-data.js` | Sample records (local demo, inspection, and the beta workspace seed) and their illustrative dated schedule |
 | `public/workspace-store.js` | Signed-in workspace client (My workspace, or the beta simulation chosen in the Workspace switch): loading, saving, conflicts, failed saves, refresh, search, uploads, and reset |
 | `server/workspace/engine.cjs` | Shared ticket workspace engine: versioned writes, repeated-submission protection, capacities, search, and not-found for anything a member may not see |
-| `server/work/index.cjs` | My workspace policy (`/api/v1/work/*`): visibility and capacities from the account's role, ownership, and assignment; active Developer accounts |
+| `server/work/index.cjs` | My workspace policy (`/api/v1/work/*`): visibility and capacities from the account's role and ownership; active Admin and Developer assignees |
 | `server/beta/index.cjs` | Beta simulation policy (`/api/v1/beta/*`): simulated views on shared test data, seed, and reset |
 | `server/workspace/attachments.cjs`, `public/attachment-rules.js` | Attachments: GridFS storage per workspace, content checks, safe downloads that follow ticket access, abandoned-upload cleanup; shared limits and safe names |
 | `server/workspace/notifications.cjs` | In-app notifications and reminders: account inboxes (My workspace) or simulated inboxes (beta), per-member read state, duplicate prevention |
