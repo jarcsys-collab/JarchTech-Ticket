@@ -135,7 +135,9 @@ try {
   const P1 = pageApi(await connect(pageWs));
   const P2 = pageApi(await connect(`ws://127.0.0.1:${debug}/devtools/page/${targetId}`));
   for (const P of [P1, P2]) { await P.cdp.send('Page.enable'); await P.cdp.send('Runtime.enable'); }
-  const signIn = async (P, n, name) => { await P.nav(`${origin}/auth/signin`); entra.signInNext(account(n, name)); await P.loads(() => P.w(`__w.click('a.primary')`)); await P.settle(); };
+  const signIn = async (P, n, name) => { await P.nav(`${origin}/auth/signin`); entra.signInNext(account(n, name)); await P.loads(() => P.w(`__w.click('a.primary')`)); await chooseBeta(P); };
+  // My workspace is the default after sign-in; these checks use the beta simulation, chosen in the Workspace switch.
+  const chooseBeta = async P => { await P.w(`localStorage.getItem('jarc-workspace')==='beta'||(localStorage.setItem('jarc-workspace','beta'),location.reload(),true)`); await sleep(600); await P.settle(); };
 
   try {
     // ---------- Shared workspace, labels, isolation from normal records ----------

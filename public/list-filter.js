@@ -3,6 +3,7 @@
 (function (root) {
   const TicketCore = typeof module !== 'undefined' ? require('./ticket-core.js') : root.TicketCore;
   const WorkflowCore = typeof module !== 'undefined' ? require('./workflow-core.js') : root.WorkflowCore;
+  const DeadlineCore = typeof module !== 'undefined' ? require('./deadline-core.js') : root.DeadlineCore;
   const UNASSIGNED = 'Unassigned';
   const PAGE_SIZE = 25;
   const MAX_PAGE_SIZE = 50;
@@ -12,22 +13,27 @@
     status: TicketCore.statuses,
     priority: WorkflowCore.PRIORITIES,
     department: WorkflowCore.DEPARTMENTS,
-    dev: [UNASSIGNED, ...TicketCore.people]
+    dev: [UNASSIGNED, ...TicketCore.people],
+    attention: ['Overdue', 'Due soon', 'Awaiting decision']
   };
-  const LABELS = { status: 'status', priority: 'priority', department: 'department', dev: 'developer' };
-  const empty = () => ({ q: '', status: '', priority: '', department: '', dev: '' });
+  const LABELS = { status: 'status', priority: 'priority', department: 'department', dev: 'developer', attention: 'deadline or decision' };
+  const ACCOUNT_ID = /^[0-9a-f]{24}$/;
+  const AWAITING = ['Awaiting acceptance', 'Waiting for information', 'Submitted', 'Under review', 'Ready for release'];
+  const empty = () => ({ q: '', status: '', priority: '', department: '', dev: '', attention: '' });
 
   class FilterError extends Error {}
 
   // Validates search parameters (from a form or a query string). Throws FilterError with a user-facing message.
-  function normalize(input = {}) {
+  // options.accounts: My workspace, where the developer filter is a Developer account id (or Unassigned).
+  function normalize(input = {}, options = {}) {
     const get = key => { const v = typeof input.get === 'function' ? input.get(key) : input[key]; return v === undefined || v === null ? '' : String(v); };
     const filters = empty();
     filters.q = get('q').replace(/\s+/g, ' ').trim();
     if (filters.q.length > MAX_QUERY) throw new FilterError(`Search text is too long (maximum ${MAX_QUERY} characters).`);
     for (const key of Object.keys(CHOICES)) {
       const v = get(key);
-      if (v && !CHOICES[key].includes(v)) throw new FilterError(`Choose a ${LABELS[key]} from the list.`);
+      const ok = key === 'dev' && options.accounts ? v === UNASSIGNED || ACCOUNT_ID.test(v) : CHOICES[key].includes(v);
+      if (v && !ok) throw new FilterError(`Choose a ${LABELS[key]} from the list.`);
       filters[key] = v;
     }
     const scope = get('scope') || 'tickets';
@@ -41,7 +47,10 @@
   const activeCount = f => Object.values(f).filter(Boolean).length;
 
   // Search matches the ticket or project ID, the summary (or project name), and the description, ignoring case.
-  function matches(t, f, scope = 'tickets') {
+  // A decision is awaited when the ticket waits on review, information, acceptance, release, or meeting confirmation.
+  const awaitingDecision = t => AWAITING.includes(t.status) || Boolean(DeadlineCore.awaiting(t));
+  // ctx: { today, settings } for the deadline filters (workspace timezone).
+  function matches(t, f, scope = 'tickets', ctx = {}) {
     if (scope === 'projects' && !t.project) return false;
     if (f.q) {
       const q = f.q.toLowerCase();
@@ -50,17 +59,23 @@
     if (f.status && t.status !== f.status) return false;
     if (f.priority && t.priority !== f.priority) return false;
     if (f.department && t.department !== f.department) return false;
-    if (f.dev && (f.dev === UNASSIGNED ? Boolean(t.dev) : t.dev !== f.dev)) return false;
+    if (f.dev && (f.dev === UNASSIGNED ? Boolean(t.dev) : (ACCOUNT_ID.test(f.dev) ? t.devId : t.dev) !== f.dev)) return false;
+    if (f.attention) {
+      const d = DeadlineCore.deadline(t, ctx.today || DeadlineCore.today(), ctx.settings || DeadlineCore.DEFAULTS);
+      if (f.attention === 'Overdue' && !(d && d.state === 'overdue')) return false;
+      if (f.attention === 'Due soon' && !(d && d.state === 'due-soon')) return false;
+      if (f.attention === 'Awaiting decision' && !awaitingDecision(t)) return false;
+    }
     return true;
   }
   // One page of matching records, newest first as given.
-  function page(items, { filters, scope, page: n, pageSize }) {
-    const all = items.filter(t => matches(t, filters, scope));
+  function page(items, { filters, scope, page: n, pageSize }, ctx = {}) {
+    const all = items.filter(t => matches(t, filters, scope, ctx));
     return { items: all.slice((n - 1) * pageSize, n * pageSize), total: all.length, page: n, pageSize };
   }
   const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  const api = { UNASSIGNED, PAGE_SIZE, MAX_PAGE_SIZE, MAX_QUERY, SCOPES, CHOICES, FilterError, empty, normalize, activeCount, matches, page, escapeRegex };
+  const api = { AWAITING, UNASSIGNED, PAGE_SIZE, MAX_PAGE_SIZE, MAX_QUERY, SCOPES, CHOICES, FilterError, empty, normalize, activeCount, matches, page, escapeRegex };
   if (typeof module !== 'undefined') module.exports = api;
   else root.ListFilter = api;
 })(typeof window !== 'undefined' ? window : globalThis);

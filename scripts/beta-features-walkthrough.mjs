@@ -134,7 +134,9 @@ try {
   const P1 = pageApi(await connect(pageWs));
   const P2 = pageApi(await connect(`ws://127.0.0.1:${debug}/devtools/page/${targetId}`));
   for (const P of [P1, P2]) { await P.cdp.send('Page.enable'); await P.cdp.send('Runtime.enable'); }
-  const signIn = async (P, n, name) => { await P.nav(`${origin}/auth/signin`); entra.signInNext(account(n, name)); await P.loads(() => P.w(`__w.click('a.primary')`)); await P.settle(); };
+  const signIn = async (P, n, name) => { await P.nav(`${origin}/auth/signin`); entra.signInNext(account(n, name)); await P.loads(() => P.w(`__w.click('a.primary')`)); await chooseBeta(P); };
+  // My workspace is the default after sign-in; these checks use the beta simulation, chosen in the Workspace switch.
+  const chooseBeta = async P => { await P.w(`localStorage.getItem('jarc-workspace')==='beta'||(localStorage.setItem('jarc-workspace','beta'),location.reload(),true)`); await sleep(600); await P.settle(); };
   const waitFor = async (P, js, ms = 8000) => { for (let t = 0; t < ms; t += 100) { if (await P.w(js).catch(() => false)) return true; await sleep(100); } return false; };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarctech-files-'));
   const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(2048, 7)]);

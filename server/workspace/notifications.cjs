@@ -1,32 +1,46 @@
-// In-app notifications for the shared beta workspace, stored in beta_notifications.
-// Recipients are simulated inboxes, never real people found by name:
-//   admin                 the Admin view
-//   developer:<name>      a sample developer (the Developer view acts as the first sample developer)
-//   requestor:sample      the Requestor view's shared sample requests
-//   member:<userId>       the signed-in member who submitted the request, seen in their own Requestor view
-// Each notification is one document per inbox and record version (unique key), so retries and repeated saves never
-// duplicate it. Read state is per signed-in member (readBy). The acting view's own inbox is never notified, and the
-// actor's copy of any other inbox starts as read, so nobody gets an unread alert for their own action.
+// In-app notifications, stored per workspace (My workspace: "notifications"; beta simulation: "beta_notifications").
+// Who receives them is decided by an addressing scheme:
+//   simulated (beta)  admin, developer:<sample name>, requestor:sample, member:<userId>. Simulated inboxes are never
+//                     real people found by name, and are never emailed.
+//   accounts (mine)   user:<userId> for the requestor and the assigned Developer account, and admins for every
+//                     active Admin account (checked when read, so a role change takes effect at once).
+// Each notification is one document per inbox and record version (or reminder stage), with a unique key, so retries,
+// repeated saves, and repeated reminder runs never duplicate it. Read state is per signed-in member (readBy). The
+// acting inbox is never notified, and the actor's copy of any other inbox starts as read.
 const { ObjectId } = require('mongodb');
 const WorkflowCore = require('../../public/workflow-core.js');
 const { HttpError } = require('../http.cjs');
 
-const ADMIN = 'admin', SAMPLE_REQUESTOR = 'requestor:sample';
+const ADMIN = 'admin', SAMPLE_REQUESTOR = 'requestor:sample', ADMINS = 'admins';
 const PAGE = 20, MAX_PAGE = 50, MAX_TEXT = 280;
 const ID = /^[0-9a-f]{24}$/;
 const developerInbox = name => `developer:${name}`;
 const requestorInbox = t => (t.requester && !t.requester.sample && t.requester.id ? `member:${t.requester.id}` : SAMPLE_REQUESTOR);
 
-// The inboxes a member sees in a simulated view.
-function inboxesFor(view, userId) {
-  if (view === 'Admin') return [ADMIN];
-  if (view === 'Developer') return [developerInbox(WorkflowCore.SAMPLE_DEVELOPER)];
-  if (view === 'Requestor') return [SAMPLE_REQUESTOR, `member:${userId}`];
-  throw new HttpError(400, 'invalid-view');
-}
-function inboxLabel(view) {
-  return { Admin: 'Admin inbox (simulated)', Developer: `Developer inbox · ${WorkflowCore.SAMPLE_DEVELOPER} (sample developer)`, Requestor: 'Requestor inbox · sample requests and your own requests' }[view];
-}
+// Simulated inboxes for the beta workspace; the simulated view is chosen per request.
+const simulated = {
+  inboxesFor(user, view) {
+    if (view === 'Admin') return [ADMIN];
+    if (view === 'Developer') return [developerInbox(WorkflowCore.SAMPLE_DEVELOPER)];
+    if (view === 'Requestor') return [SAMPLE_REQUESTOR, `member:${user._id}`];
+    throw new HttpError(400, 'invalid-view');
+  },
+  label: (user, view) => ({ Admin: 'Admin inbox (simulated)', Developer: `Developer inbox · ${WorkflowCore.SAMPLE_DEVELOPER} (sample developer)`, Requestor: 'Requestor inbox · sample requests and your own requests' }[view]),
+  resolve: (to, ticket, before) => ({ admin: ADMIN, requestor: requestorInbox(ticket), developer: ticket.dev ? developerInbox(ticket.dev) : null, 'previous-developer': before && before.dev ? developerInbox(before.dev) : null }[to]),
+  own: (actor, view, ticket) => new Set(view === 'Requestor' ? [requestorInbox(ticket)] : simulated.inboxesFor(actor, view))
+};
+// Real accounts for My workspace. The view is the capacity the actor acted in (Admin, Developer, or Requestor).
+const accounts = {
+  inboxesFor: user => [`user:${user._id}`, ...(user.role === 'Admin' ? [ADMINS] : [])],
+  label: user => (user.role === 'Admin' ? 'Your notifications and the Admin inbox' : 'Your notifications'),
+  resolve: (to, ticket, before) => ({
+    admin: ADMINS,
+    requestor: ticket.requester && ticket.requester.id ? `user:${ticket.requester.id}` : null,
+    developer: ticket.devId ? `user:${ticket.devId}` : null,
+    'previous-developer': before && before.devId && before.devId !== ticket.devId ? `user:${before.devId}` : null
+  }[to]),
+  own: (actor, view) => new Set([`user:${actor._id}`, ...(view === 'Admin' ? [ADMINS] : [])])
+};
 
 // Who hears about a ticket action: [{ type, title, to: ['admin' | 'requestor' | 'developer' | 'previous-developer'] }].
 function ticketEvents(before, after, action, input = {}) {
@@ -56,8 +70,9 @@ function ticketEvents(before, after, action, input = {}) {
     case 'schedule-meeting': case 'edit-meeting': return [e('meeting', 'Meeting proposed: please confirm', 'requestor')];
     case 'confirm-meeting': return [e('meeting', 'Meeting confirmed', 'developer')];
     case 'create-project': return [e('project', 'Project created', 'requestor', 'admin')];
+    case 'edit-scope': return before.dueDate !== after.dueDate || before.date !== after.date ? [e('deadline', 'Agreed delivery date changed', 'requestor', 'admin')] : [];
     case 'submit-acceptance': return [e('acceptance', 'Acceptance requested', 'requestor')];
-    default: return []; // task and scope edits: visible in activity, no alert
+    default: return []; // task edits: visible in activity, no alert
   }
 }
 function changeEvents(change, action, input = {}) {
@@ -84,13 +99,12 @@ function changeEvents(change, action, input = {}) {
 
 // Resolves events to notification documents for one saved record version.
 // ticket: the linked ticket after the save (for its requester and developer); before: the ticket before (assign).
-function build({ events, record, kind, target, version, ticket, before, text, actor, view, at, workspace }) {
+function build({ events, record, kind, target, version, ticket, before, text, actor, view, at, workspace, addressing = simulated }) {
   const actorId = String(actor._id);
-  const own = new Set(inboxesFor(view, actorId).filter(x => view !== 'Requestor' || x === requestorInbox(ticket)));
-  const resolve = to => ({ admin: ADMIN, requestor: requestorInbox(ticket), developer: ticket.dev ? developerInbox(ticket.dev) : null, 'previous-developer': before && before.dev ? developerInbox(before.dev) : null }[to]);
+  const own = addressing.own(actor, view, ticket);
   const docs = [], seen = new Set();
   for (const ev of events) for (const to of ev.to) {
-    const inbox = resolve(to);
+    const inbox = addressing.resolve(to, ticket, before);
     if (!inbox || own.has(inbox) || seen.has(inbox)) continue;
     seen.add(inbox);
     docs.push({
@@ -102,30 +116,50 @@ function build({ events, record, kind, target, version, ticket, before, text, ac
   return docs;
 }
 
-function createNotifications({ db, workspace, log = console, stamp }) {
-  const notes = db.collection('beta_notifications');
-  const toClient = (d, uid) => ({ id: d._id.toHexString(), type: d.type, title: d.title, text: d.text, record: d.record, kind: d.kind, target: d.target, ticket: d.ticket, actor: d.actorName, actorView: d.actorView, time: stamp(d.createdAt), at: d.createdAt, read: d.readBy.includes(uid) });
+function createNotifications({ db, workspace, collection = 'beta_notifications', addressing = simulated, log = console, stamp }) {
+  const notes = db.collection(collection);
+  const toClient = (d, uid) => ({ id: d._id.toHexString(), type: d.type, title: d.title, text: d.text, record: d.record, kind: d.kind, target: d.target, ticket: d.ticket, actor: d.actorName || 'JarcTech Ticket', actorView: d.actorView || 'Reminder', reminder: Boolean(d.reminder), time: stamp(d.createdAt), at: d.createdAt, read: d.readBy.includes(uid) });
+
+  // Inserts documents whose keys are not stored yet. Returns the inserted documents.
+  async function insertNew(docs) {
+    if (!docs.length) return [];
+    const existing = new Set((await notes.find({ workspace, key: { $in: docs.map(d => d.key) } }, { projection: { key: 1 } }).toArray()).map(d => d.key));
+    const fresh = docs.filter(d => !existing.has(d.key));
+    if (!fresh.length) return [];
+    try { await notes.insertMany(fresh, { ordered: false }); return fresh; }
+    catch (err) {
+      const errors = err.writeErrors ? [].concat(err.writeErrors) : [];
+      if (err.code !== 11000 && !errors.every(w => (w.code ?? w.err?.code) === 11000)) throw err;
+      const failed = new Set(errors.map(w => w.index ?? w.err?.index));
+      return fresh.filter((d, i) => !failed.has(i)); // another instance stored the rest a moment ago
+    }
+  }
 
   // Stores notifications for a save that already succeeded. A failure here is logged, never undoes the save.
   async function deliver(args) {
-    const docs = build({ workspace, ...args });
-    if (!docs.length) return 0;
-    try { return (await notes.insertMany(docs, { ordered: false })).insertedCount; }
-    catch (err) {
-      const dupes = (err.writeErrors ? [].concat(err.writeErrors) : []).every(w => (w.code ?? w.err?.code) === 11000);
-      if (err.code !== 11000 && !dupes) log.error(`Beta notifications not stored for ${args.record}: ${err.name}`);
-      return err.result?.insertedCount ?? 0;
+    try { return await insertNew(build({ workspace, addressing, ...args })); }
+    catch (err) { log.error(`Notifications not stored for ${args.record}: ${err.name}`); return []; }
+  }
+
+  // Reminder and escalation notifications from the scheduler. key identifies the reminder stage per inbox.
+  async function remind(items, at) {
+    const docs = [];
+    for (const r of items) {
+      const inbox = addressing.resolve(r.to, r.ticket);
+      if (!inbox) continue;
+      docs.push({ workspace, key: `${r.record}:reminder:${r.type}:${r.stage}:${inbox}`, inbox, type: r.type, title: r.title, text: `${r.record} · ${r.title}`.slice(0, MAX_TEXT), record: r.record, kind: r.kind, target: r.target, ticket: r.ticket.id, reminder: true, readBy: [], createdAt: at });
     }
+    return insertNew(docs);
   }
 
   async function unread(user, view) {
     const uid = String(user._id);
-    return notes.countDocuments({ workspace, inbox: { $in: inboxesFor(view, uid) }, readBy: { $ne: uid } });
+    return notes.countDocuments({ workspace, inbox: { $in: addressing.inboxesFor(user, view) }, readBy: { $ne: uid } });
   }
 
   async function list(user, params) {
     const view = params.get('view'), uid = String(user._id);
-    const inboxes = inboxesFor(view, uid);
+    const inboxes = addressing.inboxesFor(user, view);
     const limit = params.get('limit') ? Number(params.get('limit')) : PAGE;
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE) throw new HttpError(400, 'invalid-limit');
     const filter = { workspace, inbox: { $in: inboxes } };
@@ -137,14 +171,13 @@ function createNotifications({ db, workspace, log = console, stamp }) {
     const docs = await notes.find(filter).sort({ createdAt: -1, _id: -1 }).limit(limit + 1).toArray();
     const page = docs.slice(0, limit);
     const last = page[page.length - 1];
-    return { inbox: inboxLabel(view), items: page.map(d => toClient(d, uid)), unread: await unread(user, view), next: docs.length > limit && last ? `${last.createdAt.toISOString()}_${last._id.toHexString()}` : null };
+    return { inbox: addressing.label(user, view), items: page.map(d => toClient(d, uid)), unread: await unread(user, view), next: docs.length > limit && last ? `${last.createdAt.toISOString()}_${last._id.toHexString()}` : null };
   }
 
-  // Marks some (ids) or all notifications in the view's inboxes as read for this member only.
+  // Marks some (ids) or all notifications in the member's inboxes as read for this member only.
   async function markRead(user, body) {
     const uid = String(user._id);
-    const inboxes = inboxesFor(body.view, uid);
-    const filter = { workspace, inbox: { $in: inboxes }, readBy: { $ne: uid } };
+    const filter = { workspace, inbox: { $in: addressing.inboxesFor(user, body.view) }, readBy: { $ne: uid } };
     if (body.all !== true) {
       if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > MAX_PAGE || !body.ids.every(x => ID.test(String(x)))) throw new HttpError(400, 'invalid-ids');
       filter._id = { $in: body.ids.map(x => new ObjectId(x)) };
@@ -155,7 +188,7 @@ function createNotifications({ db, workspace, log = console, stamp }) {
 
   const reset = async () => (await notes.deleteMany({ workspace })).deletedCount;
 
-  return { deliver, list, unread, markRead, reset };
+  return { deliver, remind, list, unread, markRead, reset };
 }
 
-module.exports = { ADMIN, SAMPLE_REQUESTOR, build, changeEvents, createNotifications, developerInbox, inboxLabel, inboxesFor, requestorInbox, ticketEvents };
+module.exports = { ADMIN, ADMINS, SAMPLE_REQUESTOR, accounts, build, changeEvents, createNotifications, developerInbox, inboxesFor: simulated.inboxesFor, requestorInbox, simulated, ticketEvents };

@@ -17,7 +17,8 @@ const ENTRA = {
 
 test('no database settings: local prototype mode on 127.0.0.1:4175', () => {
   const c = loadConfig({});
-  assert.deepEqual({ ...c }, { nodeEnv: 'development', deployed: false, port: 4175, host: '127.0.0.1', database: null, auth: { mode: 'demo' } });
+  assert.deepEqual({ ...c, reminders: { ...c.reminders }, email: { ...c.email } }, { nodeEnv: 'development', deployed: false, port: 4175, host: '127.0.0.1', database: null, auth: { mode: 'demo' },
+    reminders: { enabled: true, timezone: 'Asia/Manila', dueSoonDays: 2, escalateOverdueDays: 2, acceptanceDays: 2, escalateAcceptanceDays: 5, pendingDays: 2, intervalMinutes: 5 }, email: { enabled: false, provider: 'disabled' } });
 });
 
 test('PORT and HOST are honoured; Railway and production default to all interfaces', () => {

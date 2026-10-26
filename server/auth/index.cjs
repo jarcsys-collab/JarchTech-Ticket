@@ -7,16 +7,21 @@ const { pages } = require('./pages.cjs');
 const { ABSOLUTE_MS, StoreError, createStore } = require('./store.cjs');
 const { seal, unseal } = require('./tokens.cjs');
 const { createBeta } = require('../beta/index.cjs');
+const { createWork } = require('../work/index.cjs');
 
 const FLOW_MS = 10 * 60 * 1000;
 const FLOW_PURPOSE = 'jarctech-auth-flow';
 const PUBLIC_ASSETS = new Set(['/style.css']); // used by the sign-in pages before anyone is signed in
 const USER_PATH = /^\/api\/v1\/users\/([0-9a-f]{24})$/;
 
-function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = {}) {
+// settings: due-date settings (config.reminders); email: config.email (only whether it is enabled is used here).
+function createAuth(auth, { database, log = console, oidc: oidcOptions, now, settings, email = { enabled: false } } = {}) {
   const store = createStore(database.db(), { now });
+  const recordEvent = (type, details) => store.record(type, details);
+  // My workspace: real tickets with access from the signed-in account's role and ownership.
+  const work = createWork({ db: database.db(), log, now: now || (() => new Date()), recordEvent, settings });
   // Shared beta simulation workspace, only when BETA_SIMULATION=enabled. Reset events go to the audit log.
-  const beta = auth.beta ? createBeta({ db: database.db(), log, now: now || (() => new Date()), recordEvent: (type, details) => store.record(type, details) }) : null;
+  const beta = auth.beta ? createBeta({ db: database.db(), log, now: now || (() => new Date()), recordEvent, settings }) : null;
   const oidc = createOidc(auth, oidcOptions);
   const secure = auth.secureCookies;
   const SESSION = secure ? '__Host-jt_session' : 'jt_session';
@@ -100,9 +105,20 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
       if (!beta) return sendJson(req, res, 404, { error: 'not-found' });
       return beta.handle(req, res, pathname, user);
     }
+    if (pathname === '/api/v1/work' || pathname.startsWith('/api/v1/work/')) return work.handle(req, res, pathname, user);
     if (pathname === '/api/v1/me') {
       if (write) return sendJson(req, res, 405, { error: 'method-not-allowed' }, { Allow: 'GET, HEAD' });
       return sendJson(req, res, 200, { mode: 'entra', user: store.publicUser(user) });
+    }
+    // The signed-in person's own settings. Email reminders are opt-in and only sent when email delivery is enabled.
+    if (pathname === '/api/v1/me/preferences') {
+      if (req.method === 'PATCH') {
+        const body = await readJson(req);
+        if (!body || typeof body.emailReminders !== 'boolean') return sendJson(req, res, 400, { error: 'invalid-preferences' });
+        await store.setPreferences(user, { emailReminders: body.emailReminders });
+        user.emailReminders = body.emailReminders;
+      } else if (write) return sendJson(req, res, 405, { error: 'method-not-allowed' }, { Allow: 'GET, HEAD, PATCH' });
+      return sendJson(req, res, 200, { emailReminders: user.emailReminders === true, emailDelivery: email.enabled ? 'enabled' : 'disabled' });
     }
     const userMatch = USER_PATH.exec(pathname);
     if (pathname !== '/api/v1/users' && !userMatch) return sendJson(req, res, 404, { error: 'not-found' });
@@ -148,26 +164,26 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now } = 
   async function gate(req, res, pathname) {
     if (PUBLIC_ASSETS.has(pathname)) return { public: true };
     const user = await currentUser(req);
-    if (user) return { user, page: { accessPolicy: auth.accessPolicy, inspection: auth.inspection === true, beta: auth.beta === true } };
+    if (user) return { user, page: { accessPolicy: auth.accessPolicy, inspection: auth.inspection === true, beta: auth.beta === true, deadlines: { timezone: (settings && settings.timezone) || 'Asia/Manila', dueSoonDays: settings ? settings.dueSoonDays : 2 }, email: email.enabled === true } };
     if (pathname === '/' || pathname.endsWith('.html')) redirect(res, '/auth/signin');
     else { res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); res.end('Sign in required'); }
     return null;
   }
 
-  return { handle, gate, store, cookieName: SESSION, beta: Boolean(beta) };
+  return { handle, gate, store, cookieName: SESSION, beta: Boolean(beta), engines: { work, beta } };
 }
 
 // Adds the signed-in user's display details to index.html. Values are JSON with < escaped, so they cannot end the script.
 // accessPolicy is display-only here (it explains who can sign in on the Users screen); the server enforces it.
 // With inspection enabled, inspection.js loads before the app so it can switch the app to isolated sample storage.
-// With the beta workspace enabled, beta-store.js loads before the app and beta-features.js (notifications and
-// attachments) after everything else.
-function injectSession(html, user, { accessPolicy = 'invite-only', inspection = false, beta = false } = {}) {
-  const data = JSON.stringify({ displayName: user.displayName || user.email, email: user.email, role: user.role, accessPolicy, inspection, beta }).replace(/</g, '\\u003c');
-  const before = `<script>window.JARC_SESSION=Object.freeze(${data});</script>${inspection ? '<script src="inspection.js"></script>' : ''}${beta ? '<script src="beta-store.js"></script>' : ''}`;
+// workspace-store.js (My workspace, or the beta simulation when chosen) loads before the app, and
+// workspace-features.js (notifications, attachments, deadlines) after everything else.
+function injectSession(html, user, { accessPolicy = 'invite-only', inspection = false, beta = false, deadlines = { timezone: 'Asia/Manila', dueSoonDays: 2 }, email = false } = {}) {
+  const data = JSON.stringify({ id: String(user._id), displayName: user.displayName || user.email, email: user.email, role: user.role, accessPolicy, inspection, beta, deadlines, emailDelivery: email ? 'enabled' : 'disabled' }).replace(/</g, '\\u003c');
+  const before = `<script>window.JARC_SESSION=Object.freeze(${data});</script>${inspection ? '<script src="inspection.js"></script>' : ''}<script src="workspace-store.js"></script>`;
   return html
     .replace('<script src="timeline-core.js"></script>', `${before}<script src="timeline-core.js"></script>`)
-    .replace('</body>', `<script src="auth-client.js"></script>${beta ? '<script src="beta-features.js"></script>' : ''}</body>`);
+    .replace('</body>', '<script src="auth-client.js"></script><script src="workspace-features.js"></script></body>');
 }
 
 module.exports = { createAuth, injectSession };

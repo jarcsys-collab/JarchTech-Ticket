@@ -1,20 +1,36 @@
 /* Ticket and project list: search, filters, result count, empty states, and pages.
-   Classic script loaded before app.js; it reads app.js state (view, role, state, beta, visible) only when called.
-   Local and inspection modes filter the records in this browser. The shared beta workspace searches every shared
-   record on the server, one page at a time. Filters stay set while details open and close, and reset when the
+   Classic script loaded before app.js; it reads app.js state (view, role, state, shared, accounts, server, visible)
+   only when called. Local and inspection modes filter the records in this browser. Signed-in workspaces search the
+   records you may see on the server, one page at a time. Filters stay set while details open and close, and reset when the
    sidebar section or the simulated view changes. */
 let filters = ListFilter.empty(), listPage = 1, listSeq = 0, searchTimer = null;
 
 function resetListFilters() { filters = ListFilter.empty(); listPage = 1; }
 
+const deadlineCtx = () => ({ today: workspaceToday(), settings: deadlineSettings });
+// Counts of overdue work, work due soon, and tickets waiting on a decision, as quick filters.
+function attentionBar(items) {
+  const count = attention => items.filter(t => ListFilter.matches(t, { ...ListFilter.empty(), attention }, 'tickets', deadlineCtx())).length;
+  const parts = [['Overdue', count('Overdue'), 'overdue'], ['Due soon', count('Due soon'), 'due soon'], ['Awaiting decision', count('Awaiting decision'), 'awaiting a decision']];
+  return `<div class="attention" role="group" aria-label="Needs attention">${parts.map(([key, n, text]) => `<button type="button" class="attention-item ${key === 'Overdue' && n ? 'overdue' : key === 'Due soon' && n ? 'due-soon' : ''}" data-attention="${key}" aria-pressed="${filters.attention === key}"><strong>${n}</strong> ${text}</button>`).join('')}<span class="read-only">Dates are calendar days in ${esc(deadlineSettings.timezone)}.</span></div>`;
+}
+function wireAttention() {
+  document.querySelectorAll('[data-attention]').forEach(b => b.onclick = () => {
+    filters.attention = filters.attention === b.dataset.attention ? '' : b.dataset.attention;
+    listPage = 1; render();
+  });
+}
 function filterBar() {
-  const select = (key, all, label, values) => `<select id="${key}-filter" data-filter="${key}" aria-label="Filter by ${label}"><option value="">${all}</option>${values.map(v => `<option ${filters[key] === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+  const select = (key, all, label, values) => `<select id="${key}-filter" data-filter="${key}" aria-label="Filter by ${label}"><option value="">${all}</option>${values.map(v => { const [value, text] = Array.isArray(v) ? v : [v, v]; return `<option value="${esc(value)}" ${filters[key] === value ? 'selected' : ''}>${esc(text)}</option>`; }).join('')}</select>`;
+  // My workspace filters by Developer account; the simulation and local modes by sample developer name.
+  const devValues = accounts ? [ListFilter.UNASSIGNED, ...(server.developers || []).map(d => [d.id, d.name])] : ListFilter.CHOICES.dev;
   return `<input class="search" type="search" data-filter="q" maxlength="${ListFilter.MAX_QUERY}" aria-label="Search by ID, summary, or description" placeholder="Search ${view === 'Projects' ? 'project or ticket ID' : 'ticket ID'}, summary, description…" value="${esc(filters.q)}">`
     + select('status', 'All statuses', 'status', ListFilter.CHOICES.status)
     + select('priority', 'All priorities', 'priority', ListFilter.CHOICES.priority)
     + select('department', 'All departments', 'department', ListFilter.CHOICES.department)
     // The Developer view only lists the sample developer's own work, so a developer filter would not apply.
-    + (role === 'Developer' ? '' : select('dev', 'All developers', 'assigned sample developer', ListFilter.CHOICES.dev))
+    + (role === 'Developer' ? '' : select('dev', 'All developers', accounts ? 'assigned developer' : 'assigned sample developer', devValues))
+    + select('attention', 'Any deadline', 'deadline or decision', ListFilter.CHOICES.attention)
     + `<button type="button" class="secondary" id="clear-filters" ${ListFilter.activeCount(filters) ? '' : 'disabled'}>Clear filters</button>`;
 }
 
@@ -25,7 +41,7 @@ function wireFilters() {
       filters[key] = el.value; listPage = 1;
       $('#clear-filters').disabled = !ListFilter.activeCount(filters);
       clearTimeout(searchTimer);
-      if (key === 'q' && beta) searchTimer = setTimeout(records, 300); else records();
+      if (key === 'q' && shared) searchTimer = setTimeout(records, 300); else records();
     };
   });
   $('#clear-filters').onclick = () => { resetListFilters(); render(); $('.search').focus(); };
@@ -35,13 +51,13 @@ function records() {
   if (!$('#records')) return;
   const scope = view === 'Projects' ? 'projects' : 'tickets';
   let query;
-  try { query = ListFilter.normalize({ ...filters, scope, page: listPage }); }
+  try { query = ListFilter.normalize({ ...filters, scope, page: listPage }, { accounts }); }
   catch (err) { return showList({ error: err.message }); }
-  if (!beta) return showList(ListFilter.page(visible(), query));
+  if (!shared) return showList(ListFilter.page(visible(), query, deadlineCtx()));
   const seq = ++listSeq;
   $('#records').setAttribute('aria-busy', 'true');
   $('#result-count').textContent = 'Searching shared records…';
-  window.JARC_BETA.search({ ...query.filters, scope, page: query.page, pageSize: query.pageSize, view: role }).then(r => {
+  server.search({ ...query.filters, scope, page: query.page, pageSize: query.pageSize, view: role }).then(r => {
     if (seq !== listSeq) return; // a newer search replaced this one
     if (!r.ok) return showList({ error: r.message });
     // Keep the newest copy of each record so details open on what the search returned.
@@ -77,7 +93,7 @@ function showList(r) {
       : '<div class="empty">No records here yet. New work will appear as you move through the workflow.</div>';
     if ($('#empty-clear')) $('#empty-clear').onclick = () => { resetListFilters(); render(); $('.search').focus(); };
   } else {
-    el.innerHTML = `<div class="group-title">⌄ &nbsp; ${view === 'Projects' ? 'Projects' : role === 'Admin' ? 'All requestor tickets' : 'My ticket'} <small>${total} records</small></div><div class="table-wrap"><table><thead><tr><th>${view === 'Projects' ? 'PROJECT / REQUEST' : 'REQUEST'}</th><th>STATUS</th><th>PRIORITY</th><th>ASSIGNEE</th><th>TARGET DATE</th><th>PROGRESS</th></tr></thead><tbody>${items.map(t => `<tr data-id="${esc(t.id)}" tabindex="0"><td><span class="ticket-name">${esc(view === 'Projects' ? (t.projectName || t.title) : t.title)}</span><span class="ticket-id">${view === 'Projects' ? esc(t.project) + ' · ' : ''}${esc(t.id)} &nbsp; · &nbsp; ${esc(t.department)}</span></td><td>${pill(t.status)}</td><td>${pill(t.priority)}</td><td>${person(t.dev)}</td><td>${esc(t.date)}</td><td>${prog(t)}</td></tr>`).join('')}</tbody></table></div>`;
+    el.innerHTML = `<div class="group-title">⌄ &nbsp; ${view === 'Projects' ? 'Projects' : role === 'Admin' ? 'All requestor tickets' : 'My ticket'} <small>${total} records</small></div><div class="table-wrap"><table><thead><tr><th>${view === 'Projects' ? 'PROJECT / REQUEST' : 'REQUEST'}</th><th>STATUS</th><th>PRIORITY</th><th>ASSIGNEE</th><th>DELIVERY DATE</th><th>PROGRESS</th></tr></thead><tbody>${items.map(t => `<tr data-id="${esc(t.id)}" tabindex="0"><td><span class="ticket-name">${esc(view === 'Projects' ? (t.projectName || t.title) : t.title)}</span><span class="ticket-id">${view === 'Projects' ? esc(t.project) + ' · ' : ''}${esc(t.id)} &nbsp; · &nbsp; ${esc(t.department)}</span></td><td>${pill(t.status)}</td><td>${pill(t.priority)}</td><td>${person(t.dev)}</td><td>${DeadlineCore.dueDate(t) ? dueText(t) : `<span class="requested">Requested ${esc(DeadlineCore.formatDate(DeadlineCore.requestedDate(t)))}</span>`}</td><td>${prog(t)}</td></tr>`).join('')}</tbody></table></div>`;
     el.querySelectorAll('[data-id]').forEach(x => {
       const openRecord = () => view === 'Projects' ? projectView(x.dataset.id) : detail(x.dataset.id);
       x.onclick = openRecord;

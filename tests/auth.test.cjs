@@ -113,8 +113,9 @@ test('an invited person signs in once: the invitation binds to their Entra objec
   assert.equal(me.json.user.role, 'Requestor'); assert.equal(me.json.user.email, 'person2@jarc.example');
   const index = await call('/', { cookie: res.session });
   assert.equal(index.status, 200);
-  assert.match(index.text, /window\.JARC_SESSION=Object\.freeze\(\{"displayName":"Person 2","email":"person2@jarc.example","role":"Requestor","accessPolicy":"invite-only","inspection":false,"beta":false\}\)/);
-  assert.match(index.text, /<script src="auth-client\.js"><\/script><\/body>/);
+  assert.match(index.text, /window\.JARC_SESSION=Object\.freeze\(\{"id":"[0-9a-f]{24}","displayName":"Person 2","email":"person2@jarc.example","role":"Requestor","accessPolicy":"invite-only","inspection":false,"beta":false,"deadlines":\{"timezone":"Asia\/Manila","dueSoonDays":2\},"emailDelivery":"disabled"\}\)/);
+  assert.match(index.text, /<script src="workspace-store\.js"><\/script><script src="timeline-core\.js">/, 'My workspace client loads before the app');
+  assert.match(index.text, /<script src="auth-client\.js"><\/script><script src="workspace-features\.js"><\/script><\/body>/);
   assert.doesNotMatch(index.text, /inspection\.js/, 'inspection mode is off unless enabled');
   // A different Microsoft account with the same email can never take over the already-bound invitation.
   const other = await signIn(person(3, { email: 'person2@jarc.example', preferred_username: 'person2@jarc.example' }));

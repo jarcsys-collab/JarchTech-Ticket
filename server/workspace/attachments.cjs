@@ -1,9 +1,10 @@
-// Beta attachments: screenshots and supporting files on shared beta tickets. File bytes are stored in MongoDB GridFS
-// (bucket "beta_files") in the configured database, so they survive Railway redeployments without a container
-// volume or another storage service. Metadata and lifecycle live in beta_attachments:
+// Attachments: screenshots and supporting files on tickets, for My workspace (bucket "files", records in
+// "attachments") and the beta simulation (bucket "beta_files", records in "beta_attachments"). File bytes are stored in
+// MongoDB GridFS in the configured database, so they survive Railway redeployments without a container volume or
+// another storage service. Each workspace has its own bucket and records:
 //   pending  uploaded, not yet part of a ticket; only the uploader can see, download, or remove it
 //   claimed  being added to a ticket or comment by the request in flight (returns to pending if that save fails)
-//   attached part of a ticket's activity; any signed-in beta member can download it
+//   attached part of a ticket's activity; downloadable by whoever may see that ticket (canSeeTicket)
 // Pending and claimed uploads older than PENDING_TTL_MS are abandoned and swept (file and record deleted).
 // Content is checked on the server (type signature, text encoding, Office package parts); there is no malware scan.
 // Downloads are always served as attachments with nosniff and a sandboxing CSP, so nothing runs in the app's origin.
@@ -11,7 +12,7 @@ const { GridFSBucket, ObjectId } = require('mongodb');
 const Rules = require('../../public/attachment-rules.js');
 
 const BUCKET = 'beta_files';
-const WORKSPACE_QUOTA_BYTES = 200 * 1024 * 1024; // all beta files together, to stay well inside the database plan
+const WORKSPACE_QUOTA_BYTES = 200 * 1024 * 1024; // per workspace, all files together, to stay well inside the database plan
 const MAX_PENDING_PER_USER = 20;
 const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
 const SWEEP_EVERY_MS = 10 * 60 * 1000;
@@ -68,10 +69,12 @@ function disposition(name) {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name).replace(/['()]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())}`;
 }
 
-function createAttachments({ db, workspace, log = console, now = () => new Date() }) {
-  const files = db.collection('beta_attachments');
-  const bucket = new GridFSBucket(db, { bucketName: BUCKET });
-  const fileDocs = db.collection(`${BUCKET}.files`), chunks = db.collection(`${BUCKET}.chunks`);
+// names: { attachments, bucket, tickets } collection names. canSeeTicket(actor, ticketId) decides who may download
+// an attached file; uploads that are not yet part of a ticket are only ever the uploader's.
+function createAttachments({ db, workspace, names = { attachments: 'beta_attachments', bucket: BUCKET, tickets: 'beta_tickets' }, canSeeTicket = async () => true, log = console, now = () => new Date() }) {
+  const files = db.collection(names.attachments);
+  const bucket = new GridFSBucket(db, { bucketName: names.bucket });
+  const fileDocs = db.collection(`${names.bucket}.files`), chunks = db.collection(`${names.bucket}.chunks`);
   const publicFile = d => ({ id: d._id.toHexString(), name: d.name, size: d.size, type: d.ext });
   const oid = id => { if (!ID.test(String(id || ''))) throw new AttachmentError(404, 'not-found', 'That attachment does not exist.'); return new ObjectId(id); };
   let lastSweep = 0;
@@ -98,7 +101,7 @@ function createAttachments({ db, workspace, log = console, now = () => new Date(
     }
     const [usage] = await files.aggregate([{ $match: { workspace } }, { $group: { _id: null, bytes: { $sum: '$size' } } }]).toArray();
     if ((usage?.bytes || 0) + (declared || 0) > WORKSPACE_QUOTA_BYTES) {
-      throw new AttachmentError(507, 'quota-exceeded', 'The beta workspace has reached its attachment storage limit. Ask an admin to remove old beta files or reset the beta workspace.');
+      throw new AttachmentError(507, 'quota-exceeded', 'This workspace has reached its attachment storage limit. Ask an Admin for help.');
     }
 
     const id = new ObjectId();
@@ -138,7 +141,8 @@ function createAttachments({ db, workspace, log = console, now = () => new Date(
   async function download(req, res, actor, id) {
     const doc = await files.findOne({ _id: oid(id), workspace });
     // Uploads that are not yet part of a ticket are private to their uploader; say "not found" either way.
-    if (!doc || (doc.state !== 'attached' && doc.uploadedBy !== String(actor._id))) throw new AttachmentError(404, 'not-found', 'That attachment does not exist or is no longer available.');
+    const allowed = doc && (doc.state === 'attached' ? await canSeeTicket(actor, doc.ticket) : doc.uploadedBy === String(actor._id));
+    if (!allowed) throw new AttachmentError(404, 'not-found', 'That attachment does not exist or is no longer available.');
     res.writeHead(200, {
       'Content-Type': Rules.TYPES[doc.ext].mime,
       'Content-Length': doc.size,
@@ -197,7 +201,7 @@ function createAttachments({ db, workspace, log = console, now = () => new Date(
     const cutoff = new Date(at.getTime() - PENDING_TTL_MS);
     let removed = 0;
     for (const doc of await files.find({ workspace, state: { $in: ['pending', 'claimed'] }, expiresAt: { $lt: at } }).limit(200).toArray()) {
-      const used = doc.state === 'claimed' && await db.collection('beta_tickets').findOne({ workspace, 'history.attachments.id': doc._id.toHexString() }, { projection: { id: 1 } });
+      const used = doc.state === 'claimed' && await db.collection(names.tickets).findOne({ workspace, 'history.attachments.id': doc._id.toHexString() }, { projection: { id: 1 } });
       if (used) { await files.updateOne({ _id: doc._id }, { $set: { state: 'attached', ticket: used.id, attachedAt: at }, $unset: { claim: '', expiresAt: '' } }); continue; }
       if ((await files.deleteOne({ _id: doc._id, state: doc.state })).deletedCount) { await removeFile(doc._id); removed++; }
     }
@@ -216,7 +220,7 @@ function createAttachments({ db, workspace, log = console, now = () => new Date(
     sweep().catch(err => log.error(`Beta attachment cleanup failed: ${err.name}`));
   }
 
-  // Beta reset: deletes every beta attachment record and every file in the beta-only bucket. Nothing else.
+  // Beta reset: deletes every attachment record of this workspace and every file in its bucket. Nothing else.
   async function reset() {
     const ids = [...(await files.find({ workspace }, { projection: { _id: 1 } }).toArray()), ...(await fileDocs.find({ 'metadata.workspace': workspace }, { projection: { _id: 1 } }).toArray())].map(d => d._id);
     await files.deleteMany({ workspace });
