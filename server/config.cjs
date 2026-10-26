@@ -22,6 +22,18 @@ const INSPECTION_MODES = ['enabled', 'disabled'];
 // Requestor, Admin, and Developer views. Separate from real roles, which it never changes. Off unless enabled.
 const BETA_SIMULATION_MODES = ['enabled', 'disabled'];
 const CONSUMER_TENANT = '9188040d-6c67-4c5b-b112-36a304b66dad'; // personal Microsoft accounts
+// Due-date reminders and escalation (in-app; optionally email). Whole days, in the workspace timezone.
+const REMINDER_SETTINGS = {
+  REMINDER_DUE_SOON_DAYS: ['dueSoonDays', 2, 0, 60],
+  REMINDER_ESCALATE_OVERDUE_DAYS: ['escalateOverdueDays', 2, 0, 60],
+  REMINDER_ACCEPTANCE_DAYS: ['acceptanceDays', 2, 1, 60],
+  REMINDER_ESCALATE_ACCEPTANCE_DAYS: ['escalateAcceptanceDays', 5, 1, 120],
+  REMINDER_PENDING_DAYS: ['pendingDays', 2, 1, 60],
+  REMINDER_INTERVAL_MINUTES: ['intervalMinutes', 5, 1, 1440]
+};
+// Optional email delivery. Off unless EMAIL_DELIVERY names a provider and its settings are complete.
+const EMAIL_PROVIDERS = ['disabled', 'resend'];
+const EMAIL_ADDRESS = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
 
 class ConfigError extends Error {
   constructor(problems) {
@@ -63,9 +75,46 @@ function loadConfig(env = process.env) {
 
   const database = readDatabase(env, { required: deployed, problems });
   const auth = loadAuth(env, { deployed, port, database, problems });
+  const reminders = loadReminders(env, problems);
+  const email = loadEmail(env, problems);
 
   if (problems.length) throw new ConfigError(problems);
-  return Object.freeze({ nodeEnv, deployed, port, host, database: database && Object.freeze(database), auth: Object.freeze(auth) });
+  return Object.freeze({ nodeEnv, deployed, port, host, database: database && Object.freeze(database), auth: Object.freeze(auth), reminders: Object.freeze(reminders), email: Object.freeze(email) });
+}
+
+function loadReminders(env, problems) {
+  const value = name => (env[name] || '').trim();
+  const out = { enabled: (value('REMINDERS') || 'enabled') === 'enabled', timezone: value('WORKSPACE_TIMEZONE') || 'Asia/Manila' };
+  if (!['enabled', 'disabled'].includes(value('REMINDERS') || 'enabled')) problems.push('REMINDERS must be enabled or disabled.');
+  try { new Intl.DateTimeFormat('en-CA', { timeZone: out.timezone }); } catch { problems.push('WORKSPACE_TIMEZONE must be an IANA time zone such as Asia/Manila.'); }
+  for (const [name, [key, fallback, min, max]] of Object.entries(REMINDER_SETTINGS)) {
+    const raw = value(name);
+    const n = raw === '' ? fallback : Number(raw);
+    if (!Number.isInteger(n) || n < min || n > max) problems.push(`${name} must be a whole number from ${min} to ${max}.`);
+    out[key] = n;
+  }
+  if (out.escalateAcceptanceDays < out.acceptanceDays) problems.push('REMINDER_ESCALATE_ACCEPTANCE_DAYS must not be less than REMINDER_ACCEPTANCE_DAYS.');
+  return out;
+}
+
+// EMAIL_DELIVERY=resend sends reminder and escalation emails through Resend's HTTPS API (no Microsoft Entra or
+// Graph permissions involved). Only people who turned email reminders on receive them.
+function loadEmail(env, problems) {
+  const value = name => (env[name] || '').trim();
+  const provider = value('EMAIL_DELIVERY') || 'disabled';
+  if (!EMAIL_PROVIDERS.includes(provider)) { problems.push('EMAIL_DELIVERY must be disabled or resend.'); return { enabled: false, provider: 'disabled' }; }
+  if (provider === 'disabled') return { enabled: false, provider };
+  const before = problems.length;
+  const from = value('EMAIL_FROM'), key = value('RESEND_API_KEY');
+  const address = (/<([^<>]+)>\s*$/.exec(from) || [null, from])[1];
+  if (!from) problems.push('EMAIL_FROM is required when EMAIL_DELIVERY=resend (for example "JarcTech Ticket <tickets@your-domain>").');
+  else if (PLACEHOLDER.test(from) && !EMAIL_ADDRESS.test(address)) problems.push('EMAIL_FROM still contains a placeholder.');
+  else if (!EMAIL_ADDRESS.test(address)) problems.push('EMAIL_FROM must be an email address, optionally as "Name <address>".');
+  if (!key) problems.push('RESEND_API_KEY is required when EMAIL_DELIVERY=resend.');
+  else if (PLACEHOLDER.test(key)) problems.push('RESEND_API_KEY still contains a placeholder. Enter the real value in .env or Railway variables.');
+  if (!(value('APP_BASE_URL'))) problems.push('APP_BASE_URL is required when EMAIL_DELIVERY is enabled, for the sign-in link in emails.');
+  if (problems.length > before) return { enabled: false, provider };
+  return { enabled: true, provider, from, apiKey: key, appUrl: value('APP_BASE_URL').replace(/\/$/, '') };
 }
 
 function readDatabase(env, { required, problems }) {

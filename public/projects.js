@@ -16,7 +16,7 @@ const baseTicketDetail = detail;
 detail = function (id) {
   baseTicketDetail(id);
   const t = state.tickets.find(x => x.id === id);
-  const dev = role === 'Developer' && t.dev === people[0];
+  const dev = canDev(t);
   if ($('#create-project')) $('#create-project').onclick = () => projectSetup(t);
   if ($('#add-task')) $('#add-task').onclick = () => editProjectTask(t, null, false);
   if (t.project) {
@@ -62,7 +62,7 @@ function projectSetup(t, draft = null) {
 }
 
 function taskFields(task = {}, index = 0, owner = '') {
-  return `<fieldset class="plan-task"><legend>Task ${index + 1}</legend><div class="field-grid"><label class="full">Task name *<input name="title" required maxlength="150" value="${esc(task.title || '')}"></label><label class="full">Agreed requirement *<textarea name="requirement" required>${esc(task.requirement || '')}</textarea></label><label class="full">Task acceptance criteria *<textarea name="criteria" required>${esc(task.criteria || '')}</textarea></label><label>Start date *<input name="start" type="date" required value="${esc(task.start || '')}"></label><label>End date *<input name="end" type="date" required value="${esc(task.end || '')}"></label><label class="full">Task owner<select name="owner">${options(people, task.owner || owner)}</select></label></div><button type="button" class="secondary danger remove-task">Remove task</button></fieldset>`;
+  return `<fieldset class="plan-task"><legend>Task ${index + 1}</legend><div class="field-grid"><label class="full">Task name *<input name="title" required maxlength="150" value="${esc(task.title || '')}"></label><label class="full">Agreed requirement *<textarea name="requirement" required>${esc(task.requirement || '')}</textarea></label><label class="full">Task acceptance criteria *<textarea name="criteria" required>${esc(task.criteria || '')}</textarea></label><label>Start date *<input name="start" type="date" required value="${esc(task.start || '')}"></label><label>End date *<input name="end" type="date" required value="${esc(task.end || '')}"></label><label class="full">Task owner<select name="owner">${options(ownerChoices(), task.owner || owner)}</select></label></div><button type="button" class="secondary danger remove-task">Remove task</button></fieldset>`;
 }
 function readTaskFields(container) {
   return [...container.querySelectorAll('.plan-task')].map(el => Object.fromEntries(
@@ -96,7 +96,7 @@ function $$(selector) { return [...document.querySelectorAll(selector)]; }
 function projectView(id) {
   const t = state.tickets.find(x => x.id === id);
   if (!t?.project) return detail(id);
-  const editable = role === 'Developer' && t.dev === people[0] && ['Planning', 'In progress'].includes(t.status);
+  const editable = canDev(t) && ['Planning', 'In progress'].includes(t.status);
   const chart = TL.timeline(t.tasks);
   const unscheduled = t.tasks.filter(x => TL.day(x.start) === null || TL.day(x.end) === null).length;
   open(`<div class="tagline">${t.project} / ${t.id}</div><h2>${esc(t.projectName || t.title)}</h2><p>Project Gantt chart · ${esc(t.name)} · ${esc(t.dev || 'Unassigned')}</p><div class="actions"><button class="secondary" id="back-ticket">← Ticket details</button>${editable?'<button class="primary" id="timeline-add">＋ Add dated task</button><button class="secondary" id="edit-scope">Edit project details</button>':''}${pill(t.status)}</div><div class="scope-summary"><div><h3>Agreed requirements</h3><p>${esc(t.requirements || t.notes || t.description)}</p></div><div><h3>Acceptance criteria</h3><p>${esc(t.criteria || 'Not recorded yet.')}</p></div></div><div class="gantt-summary"><span>${t.tasks.filter(x => x.done).length} / ${t.tasks.length} tasks complete</span>${prog(t)}<span>Target: ${esc(t.date)}</span></div>${t.tasks.some(x => x.scheduleSource === 'demo')?'<p class="read-only">Sample task dates are illustrative demo data.</p>':''}${unscheduled?`<div class="banner">${unscheduled} task(s) have no saved schedule. The developer can add dates; existing tasks are preserved.</div>`:''}<div class="gantt-scroll"><div class="gantt" role="region" aria-label="Project Gantt chart"><div class="gantt-head"><span>Task / requirement</span><div class="gantt-axis">${chart?chart.ticks.map(x => `<span>${x.slice(5)}</span>`).join(''):'No dated tasks yet'}</div></div>${t.tasks.map((task, i) => `<div class="gantt-row"><button class="gantt-task" data-project-task="${i}"><b>${task.done?'✓ ':''}${esc(task.title)}</b><small>${esc(task.owner || t.dev)} · ${task.start?esc(task.start)+' → '+esc(task.end):'Unscheduled'}</small><small>${esc(task.requirement || 'Requirement not recorded')}</small></button><div class="gantt-lane">${chart?.bars[i]?`<button data-project-task="${i}" class="gantt-bar ${task.done?'done':''}" style="left:${chart.bars[i].left}%;width:${chart.bars[i].width}%" aria-label="${esc(task.title)}: ${esc(task.start)} to ${esc(task.end)}, ${task.done?'complete':'incomplete'}"><span>${chart.bars[i].days}d</span></button>`:'<span class="unscheduled">Schedule needed</span>'}</div></div>`).join('')}</div></div><p class="read-only">Click a task or bar to view its requirement, criteria, owner, and dates. ${editable?'You can edit tasks and mark them complete.':'Task updates are managed by the assigned developer.'}</p>`);
@@ -109,7 +109,7 @@ function projectView(id) {
 
 function editProjectTask(t, index, returnToGantt) {
   const task = index === null ? {} : t.tasks[index];
-  const editable = role === 'Developer' && t.dev === people[0] && ['Planning', 'In progress'].includes(t.status);
+  const editable = canDev(t) && ['Planning', 'In progress'].includes(t.status);
   const back = () => returnToGantt ? projectView(t.id) : detail(t.id);
   open(`<div class="tagline">${t.project} · TASK DETAIL</div><h2>${index === null?'Add dated project task':'Project task'}</h2><form id="dated-task-form">${taskFields(task, index || 0, t.dev)}<label class="task"><input name="done" type="checkbox" ${task.done?'checked':''}>Task complete</label><div class="actions">${editable?'<button class="primary">Save task</button>':''}<button type="button" class="secondary" id="task-back">Back to project</button></div></form>`);
   $('.remove-task').remove();

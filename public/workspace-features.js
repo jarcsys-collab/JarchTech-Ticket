@@ -1,12 +1,14 @@
-/* Shared beta workspace extras: in-app notifications and attachments. The server adds this script last, only when
-   BETA_SIMULATION=enabled; it does nothing during local inspection. Uses the app.js and projects.js globals
-   (beta, state, role, detail, projectView, changeDetail, open, toast) and window.JARC_BETA.
-   Notifications are in-app only: simulated role and sample-developer inboxes, with read state per signed-in member.
+/* Signed-in workspace extras: in-app notifications (including due-date reminders) and attachments, for My workspace
+   and the beta simulation. The server adds this script last in signed-in mode; it does nothing during local
+   inspection. Uses the app.js and projects.js globals (shared, simulated, state, role, detail, projectView,
+   changeDetail, open, toast) and window.JARC_SERVER.
+   My workspace notifications go to your account (and the Admin inbox for Admins). The simulation uses simulated role
+   and sample-developer inboxes. Read state is per signed-in member.
    The unread count refreshes after saves, when the tab becomes visible, when the view changes, and every
    POLL_MS while the tab is visible. */
 (function () {
-  if (typeof beta === 'undefined' || !beta) return;
-  const B = window.JARC_BETA, R = window.AttachmentRules;
+  if (typeof shared === 'undefined' || !shared) return;
+  const B = window.JARC_SERVER, R = window.AttachmentRules;
   const POLL_MS = 60000;
   const bell = $('#notifications'), badge = $('#notice-count');
 
@@ -51,11 +53,11 @@
     renderPanel();
   }
   function renderPanel() {
-    $('#inbox-label').innerHTML = `<strong>${esc(inboxLabel)}</strong><br>Simulated recipients for the shared beta test data: nothing is emailed or sent to the people named in sample records. Read and unread are tracked for you only.`;
+    $('#inbox-label').innerHTML = `<strong>${esc(inboxLabel)}</strong><br>${simulated ? 'Simulated recipients for the shared beta test data: nothing is emailed or sent to the people named in sample records.' : `Notifications for your account, including due-date reminders and escalations. Email: ${window.JARC_SESSION.emailDelivery === 'enabled' ? 'available (turn it on under Settings)' : 'not enabled, so notifications are in-app only'}.`} Read and unread are tracked for you only.`;
     $('#mark-all').disabled = !unreadCount;
     $('#notification-list').innerHTML = !items.length
       ? `<div class="empty">No notifications for the ${esc(role)} view yet. Assignments, comments, requests for information, meeting proposals, acceptance requests, and returned corrections will appear here.</div>`
-      : `<ul class="notifications">${items.map(n => `<li class="notification${n.read ? '' : ' unread'}"><button class="notification-open" data-open="${n.id}"><b>${n.read ? '' : '<span class="sr-only">Unread: </span>'}${esc(n.title)}</b><span>${esc(n.text)}</span><small>${esc(n.time)} · ${esc(n.actor)} (${esc(n.actorView)} view)</small></button>${n.read ? '' : `<button class="secondary mark-read" data-read="${n.id}">Mark read<span class="sr-only">: ${esc(n.title)}</span></button>`}</li>`).join('')}</ul>${next ? '<div class="actions centered"><button class="secondary" id="older">Show older</button></div>' : ''}`;
+      : `<ul class="notifications">${items.map(n => `<li class="notification${n.read ? '' : ' unread'}"><button class="notification-open" data-open="${n.id}"><b>${n.read ? '' : '<span class="sr-only">Unread: </span>'}${esc(n.title)}</b><span>${esc(n.text)}</span><small>${esc(n.time)} · ${n.reminder ? 'Automatic reminder' : `${esc(n.actor)} (${esc(n.actorView)}${simulated ? ' view' : ''})`}</small></button>${n.read ? '' : `<button class="secondary mark-read" data-read="${n.id}">Mark read<span class="sr-only">: ${esc(n.title)}</span></button>`}</li>`).join('')}</ul>${next ? '<div class="actions centered"><button class="secondary" id="older">Show older</button></div>' : ''}`;
     document.querySelectorAll('[data-open]').forEach(b => b.onclick = () => openNotification(items.find(n => n.id === b.dataset.open)));
     document.querySelectorAll('[data-read]').forEach(b => b.onclick = async () => {
       b.disabled = true;
@@ -80,7 +82,7 @@
     if (!n.read) mark([n.id]);
     if (!state.tickets.some(t => t.id === n.ticket) || (n.kind === 'change' && !state.changes.some(c => c.id === n.record))) {
       const r = await B.ticket(n.ticket);
-      if (!r.ok) return toast(r.status === 404 ? `${n.record} no longer exists (the beta workspace may have been reset).` : r.message);
+      if (!r.ok) return toast(r.status === 404 ? `${n.record} is not available${simulated ? ' (the beta workspace may have been reset)' : ' to you any more'}.` : r.message);
       for (const [list, key] of [[state.tickets, 'tickets'], [state.changes, 'changes']]) for (const rec of r.data[key]) { const i = list.findIndex(x => x.id === rec.id); if (i < 0) list.push(rec); else list[i] = rec; }
     }
     const t = state.tickets.find(x => x.id === n.ticket);
@@ -91,8 +93,8 @@
 
   bell.onclick = openPanel;
   showBadge(0);
-  window.addEventListener('jarc-beta-loaded', refreshUnread);
-  window.addEventListener('jarc-beta-saved', refreshUnread);
+  window.addEventListener('jarc-workspace-loaded', refreshUnread);
+  window.addEventListener('jarc-workspace-saved', refreshUnread);
   $('#demo-role').addEventListener('change', () => { showBadge(0); refreshUnread(); });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshUnread(); });
   setInterval(() => { if (document.visibilityState === 'visible') refreshUnread(); }, POLL_MS);
@@ -105,7 +107,7 @@
     const box = document.createElement('div');
     box.className = 'uploader';
     const inputId = 'files-' + Math.random().toString(36).slice(2);
-    box.innerHTML = `<label for="${inputId}">Attachments (optional)</label><input id="${inputId}" type="file" multiple accept="${R.ACCEPT}" aria-describedby="${inputId}-hint"><p class="read-only" id="${inputId}-hint">${esc(R.SUMMARY)} Screenshots and supporting files are visible to everyone in the beta workspace once submitted. Files are checked for type and size; they are not scanned for malware.</p><ul class="upload-list" aria-live="polite"></ul>`;
+    box.innerHTML = `<label for="${inputId}">Attachments (optional)</label><input id="${inputId}" type="file" multiple accept="${R.ACCEPT}" aria-describedby="${inputId}-hint"><p class="read-only" id="${inputId}-hint">${esc(R.SUMMARY)} ${simulated ? 'Screenshots and supporting files are visible to everyone in the beta workspace once submitted.' : 'Once submitted, files are visible to the people who can see this ticket.'} Files are checked for type and size; they are not scanned for malware.</p><ul class="upload-list" aria-live="polite"></ul>`;
     form.insertBefore(box, before);
     const input = box.querySelector('input'), list = box.querySelector('.upload-list');
     const entries = [];
@@ -177,7 +179,7 @@
     if (all.length) {
       const section = document.createElement('section');
       section.className = 'ticket-files';
-      section.innerHTML = `<h3>Attachments <small>(${all.length})</small></h3><ul class="file-links">${all.map(f => `<li><a href="/api/v1/beta/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(R.formatSize(f.size))} · ${esc(f.by || '')} · ${esc(f.time)}</small></li>`).join('')}</ul>`;
+      section.innerHTML = `<h3>Attachments <small>(${all.length})</small></h3><ul class="file-links">${all.map(f => `<li><a href="${B.base}/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(R.formatSize(f.size))} · ${esc(f.by || '')} · ${esc(f.time)}</small></li>`).join('')}</ul>`;
       $('.timeline').previousElementSibling.before(section);
     }
     const text = form.querySelector('textarea');

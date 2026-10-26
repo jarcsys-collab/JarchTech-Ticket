@@ -5,14 +5,21 @@ const { createServer } = require('./server/app.cjs');
 const { ConfigError, loadConfig, loadEnvFile } = require('./server/config.cjs');
 const { createDatabase } = require('./server/database.cjs');
 const { createAuth } = require('./server/auth/index.cjs');
+const { createEmail } = require('./server/workspace/email.cjs');
+const { createReminders } = require('./server/workspace/reminders.cjs');
 
 const SHUTDOWN_GRACE_MS = 8000;
 
 // Starts the server for an already validated config. Resolves once listening.
-// `oidc` and `now` are for tests only (a local mock sign-in provider and a controllable clock).
-async function start(config, { log = console, oidc, now } = {}) {
+// `oidc`, `now`, `scheduler`, and `emailFetch` are for tests only (a local mock sign-in provider, a controllable
+// clock, whether the reminder timer starts, and a stand-in for the email provider's HTTP API).
+async function start(config, { log = console, oidc, now, scheduler = true, emailFetch } = {}) {
   const database = createDatabase(config.database);
-  const auth = config.auth.mode === 'entra' ? createAuth(config.auth, { database, log, oidc, now }) : null;
+  const auth = config.auth.mode === 'entra' ? createAuth(config.auth, { database, log, oidc, now, settings: config.reminders, email: config.email }) : null;
+  // Reminders run on the server with sign-in (they need My workspace); email is optional and off by default.
+  const clock = now || (() => new Date());
+  const email = auth ? createEmail({ config: config.email, db: database.db(), fetch: emailFetch, now: clock, log }) : null;
+  const reminders = auth ? createReminders({ db: database.db(), workspaces: Object.values(auth.engines).filter(Boolean), settings: config.reminders, email, now: clock, log }) : null;
   let shuttingDown = false;
   const server = createServer({ database, auth, isShuttingDown: () => shuttingDown, log });
 
@@ -27,6 +34,11 @@ async function start(config, { log = console, oidc, now } = {}) {
   }
   const port = server.address().port;
   log.log(`JarcTech Ticket: http://localhost:${port}`);
+  if (reminders && config.reminders.enabled && scheduler) reminders.start();
+  if (auth) {
+    log.log(config.reminders.enabled ? `Reminders: on (every ${config.reminders.intervalMinutes} min, ${config.reminders.timezone}).` : 'Reminders: off (REMINDERS=disabled).');
+    log.log(config.email.enabled ? 'Email: enabled via Resend, only for people who turn on email reminders.' : 'Email: disabled. Notifications are in-app only.');
+  }
   log.log(!auth
     ? 'Sign-in: none. Browser-only demo mode for local use; records stay in this browser.'
     : config.auth.accessPolicy === 'tenant-members'
@@ -52,11 +64,12 @@ async function start(config, { log = console, oidc, now } = {}) {
         server.closeIdleConnections();
         setTimeout(() => server.closeAllConnections(), SHUTDOWN_GRACE_MS).unref();
       });
+      if (reminders) await reminders.stop();
       await database.close();
       log.log('Shutdown complete.');
     })();
   }
-  return { server, database, port, shutdown };
+  return { server, database, port, shutdown, reminders, email, auth };
 }
 
 async function main() {

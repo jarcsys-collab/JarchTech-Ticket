@@ -188,7 +188,7 @@ test('inspection mode is offered only when INSPECTION_MODE=enabled and never cha
     const session = cb.headers.getSetCookie().find(c => c.startsWith('jt_session=')).split(';')[0];
     const page = await (await get('/', session)).text();
     assert.match(page, /"role":"Requestor","accessPolicy":"tenant-members","inspection":true/);
-    assert.match(page, /<script src="inspection\.js"><\/script><script src="timeline-core\.js">/, 'inspection.js loads before the app');
+    assert.match(page, /<script src="inspection\.js"><\/script><script src="workspace-store\.js"><\/script><script src="timeline-core\.js">/, 'inspection.js loads before the workspace client and the app');
     assert.equal((await get('/inspection.js', session)).status, 200);
     assert.equal((await get('/inspection.js')).status, 401, 'not served without a session');
     // Previewing a role is client-side only: the server role and admin API are unchanged.

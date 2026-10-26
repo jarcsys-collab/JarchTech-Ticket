@@ -3,6 +3,7 @@
 const { isDeepStrictEqual } = require('node:util');
 const { statuses: TICKET_STATUSES } = require('../public/ticket-core.js');
 const { CHANGE_STATUSES } = require('../public/workflow-core.js');
+const OBJECT_ID = '^[0-9a-f]{24}$';
 
 const ROLES = ['Requestor', 'Admin', 'Developer'];
 const STATUSES = ['invited', 'active', 'disabled'];
@@ -179,11 +180,165 @@ const COLLECTIONS = {
       properties: { files_id: { bsonType: 'objectId' }, n: { bsonType: 'int', minimum: 0 }, data: { bsonType: 'binData' } }
     } },
     indexes: [{ key: { files_id: 1, n: 1 }, name: 'files_id_1_n_1', unique: true }]
+  },
+  // My workspace (real accounts and roles; server/work). Same record shapes as the beta workspace, with
+  // workspace "main", a real requester account, and the assigned Developer account (devId).
+  tickets: {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['workspace', 'id', 'title', 'status', 'priority', 'tasks', 'history', 'requester', 'version', 'createdAt', 'updatedAt'],
+      properties: {
+        workspace: { enum: ['main'] },
+        id: { bsonType: 'string', pattern: '^JRC-[0-9]+$' },
+        title: { bsonType: 'string', maxLength: 150 },
+        status: { enum: TICKET_STATUSES },
+        priority: { enum: ['Low', 'Medium', 'High', 'Critical'] },
+        tasks: { bsonType: 'array', maxItems: 200 },
+        history: { bsonType: 'array', maxItems: 2000 },
+        requester: { bsonType: 'object', required: ['id', 'name'], properties: { id: { bsonType: 'string', pattern: OBJECT_ID }, name: { bsonType: 'string' } } },
+        devId: { bsonType: 'string', pattern: OBJECT_ID },
+        requestedDate: { bsonType: 'string' },
+        dueDate: { bsonType: 'string' },
+        version: { bsonType: ['int', 'long', 'double'], minimum: 1 },
+        requestId: { bsonType: 'string' },
+        createdAt: { bsonType: 'date' },
+        updatedAt: { bsonType: 'date' }
+      }
+    } },
+    indexes: [
+      { key: { workspace: 1, id: 1 }, name: 'workspace_id', unique: true },
+      { key: { workspace: 1, requestId: 1 }, name: 'workspace_request', unique: true, partialFilterExpression: { requestId: { $type: 'string' } } },
+      { key: { workspace: 1, createdAt: -1, id: -1 }, name: 'workspace_created' },
+      { key: { workspace: 1, status: 1, createdAt: -1 }, name: 'workspace_status_created' },
+      { key: { workspace: 1, devId: 1, createdAt: -1 }, name: 'workspace_assignee_created' },
+      { key: { workspace: 1, 'requester.id': 1, createdAt: -1 }, name: 'workspace_requester_created' },
+      { key: { workspace: 1, status: 1, dueDate: 1 }, name: 'workspace_status_due' }
+    ]
+  },
+  ticket_changes: {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['workspace', 'id', 'ticket', 'title', 'status', 'history', 'version', 'createdAt', 'updatedAt'],
+      properties: {
+        workspace: { enum: ['main'] },
+        id: { bsonType: 'string', pattern: '^CR-[0-9]+$' },
+        ticket: { bsonType: 'string', pattern: '^JRC-[0-9]+$' },
+        title: { bsonType: 'string', maxLength: 150 },
+        status: { enum: CHANGE_STATUSES },
+        history: { bsonType: 'array', maxItems: 2000 },
+        version: { bsonType: ['int', 'long', 'double'], minimum: 1 },
+        requestId: { bsonType: 'string' },
+        createdAt: { bsonType: 'date' },
+        updatedAt: { bsonType: 'date' }
+      }
+    } },
+    indexes: [
+      { key: { workspace: 1, id: 1 }, name: 'workspace_id', unique: true },
+      { key: { workspace: 1, requestId: 1 }, name: 'workspace_request', unique: true, partialFilterExpression: { requestId: { $type: 'string' } } },
+      { key: { workspace: 1, ticket: 1 }, name: 'workspace_ticket' }
+    ]
+  },
+  attachments: {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['workspace', 'name', 'ext', 'size', 'state', 'uploadedBy', 'uploadedAt'],
+      properties: {
+        workspace: { enum: ['main'] },
+        name: { bsonType: 'string', minLength: 1, maxLength: 120 },
+        ext: { bsonType: 'string', maxLength: 5 },
+        size: { bsonType: ['int', 'long', 'double'], minimum: 1, maximum: 10485760 },
+        state: { enum: ['pending', 'claimed', 'attached'] },
+        uploadedBy: { bsonType: 'string', pattern: OBJECT_ID },
+        uploadedAt: { bsonType: 'date' },
+        expiresAt: { bsonType: 'date' },
+        ticket: nullable('string')
+      }
+    } },
+    indexes: [
+      { key: { workspace: 1, state: 1, expiresAt: 1 }, name: 'workspace_state_expires' },
+      { key: { workspace: 1, uploadedBy: 1, state: 1 }, name: 'workspace_uploader_state' },
+      { key: { workspace: 1, ticket: 1 }, name: 'workspace_ticket' },
+      { key: { claim: 1 }, name: 'claim', partialFilterExpression: { claim: { $type: 'string' } } }
+    ]
+  },
+  // Notifications for real accounts: user:<id> inboxes and the shared admins inbox (read state per member).
+  notifications: {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['workspace', 'key', 'inbox', 'type', 'title', 'record', 'kind', 'readBy', 'createdAt'],
+      properties: {
+        workspace: { enum: ['main'] },
+        key: { bsonType: 'string' },
+        inbox: { bsonType: 'string', pattern: '^(admins|user:[0-9a-f]{24})$' },
+        title: { bsonType: 'string', maxLength: 150 },
+        text: { bsonType: 'string', maxLength: 300 },
+        record: { bsonType: 'string', pattern: '^(JRC|CR)-[0-9]+$' },
+        kind: { enum: ['ticket', 'change'] },
+        readBy: { bsonType: 'array', maxItems: 5000 },
+        createdAt: { bsonType: 'date' }
+      }
+    } },
+    indexes: [
+      { key: { workspace: 1, key: 1 }, name: 'workspace_key', unique: true },
+      { key: { workspace: 1, inbox: 1, createdAt: -1, _id: -1 }, name: 'workspace_inbox_created' }
+    ]
+  },
+  'files.files': {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['length', 'filename', 'uploadDate', 'metadata'],
+      properties: { metadata: { bsonType: 'object', required: ['workspace', 'uploadedBy'], properties: { workspace: { enum: ['main'] } } } }
+    } },
+    indexes: [
+      { key: { filename: 1, uploadDate: 1 }, name: 'filename_1_uploadDate_1' },
+      { key: { 'metadata.workspace': 1, uploadDate: 1 }, name: 'workspace_uploaded' }
+    ]
+  },
+  'files.chunks': {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['files_id', 'n', 'data'],
+      properties: { files_id: { bsonType: 'objectId' }, n: { bsonType: 'int', minimum: 0 }, data: { bsonType: 'binData' } }
+    } },
+    indexes: [{ key: { files_id: 1, n: 1 }, name: 'files_id_1_n_1', unique: true }]
+  },
+  // One lease per scheduled job, so only one running instance does the work at a time; it expires if that instance stops.
+  scheduler_locks: {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['_id', 'owner', 'leaseUntil'],
+      properties: { _id: { bsonType: 'string' }, owner: { bsonType: 'string' }, leaseUntil: { bsonType: 'date' }, lastRunAt: { bsonType: 'date' } }
+    } },
+    indexes: []
+  },
+  // Optional email (EMAIL_DELIVERY): one message per notification and recipient account, retried with backoff.
+  email_outbox: {
+    validator: { $jsonSchema: {
+      bsonType: 'object',
+      required: ['key', 'userId', 'to', 'subject', 'text', 'status', 'attempts', 'nextAttemptAt', 'createdAt'],
+      properties: {
+        key: { bsonType: 'string' },
+        userId: { bsonType: 'objectId' },
+        to: { bsonType: 'string' },
+        subject: { bsonType: 'string', maxLength: 200 },
+        text: { bsonType: 'string', maxLength: 2000 },
+        status: { enum: ['pending', 'sent', 'failed', 'skipped'] },
+        attempts: { bsonType: ['int', 'long', 'double'], minimum: 0 },
+        nextAttemptAt: { bsonType: 'date' },
+        createdAt: { bsonType: 'date' }
+      }
+    } },
+    indexes: [
+      { key: { key: 1 }, name: 'key_unique', unique: true },
+      { key: { status: 1, nextAttemptAt: 1 }, name: 'status_next' }
+    ]
   }
 };
 // Sign-in needs the core collections; the beta workspace needs its own only when BETA_SIMULATION is enabled.
 const CORE_COLLECTIONS = ['users', 'sessions', 'events'];
 const BETA_COLLECTIONS = ['beta_tickets', 'beta_changes', 'beta_attachments', 'beta_notifications', 'beta_files.files', 'beta_files.chunks'];
+// My workspace, reminders, and the email outbox: required whenever sign-in is enabled.
+const WORK_COLLECTIONS = ['tickets', 'ticket_changes', 'attachments', 'notifications', 'files.files', 'files.chunks', 'scheduler_locks', 'email_outbox'];
 
 // Idempotent: creates missing collections and indexes and refreshes validators. Returns a summary of actions.
 async function ensureSchema(db) {
@@ -217,4 +372,4 @@ async function missingSchema(db, names = CORE_COLLECTIONS) {
   return missing;
 }
 
-module.exports = { BETA_COLLECTIONS, COLLECTIONS, CORE_COLLECTIONS, ROLES, STATUSES, ensureSchema, missingSchema };
+module.exports = { BETA_COLLECTIONS, COLLECTIONS, CORE_COLLECTIONS, WORK_COLLECTIONS, ROLES, STATUSES, ensureSchema, missingSchema };

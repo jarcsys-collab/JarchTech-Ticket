@@ -1,6 +1,8 @@
 /* Signed-in mode only: the server adds this script (and window.JARC_SESSION) when AUTH_MODE=entra.
-   Shows who is signed in, a Sign out button, and the Admin Users screen. The role shown comes from the server;
-   role and access changes go through the admin API, which the server checks on every request. */
+   Shows who is signed in, the Workspace switch (My workspace or Beta simulation), Settings (email reminders),
+   a Sign out button, and the Admin Users screen. The role shown comes from the server; role and access changes go
+   through the admin API, which the server checks on every request. If an Admin changes your role while the page is
+   open, the page reloads with the new role when you return to it. */
 (function () {
   const me = window.JARC_SESSION;
   if (!me) return;
@@ -14,8 +16,9 @@
 
   const inspection = window.JARC_INSPECTION || null; // present only when the server enables INSPECTION_MODE
   const inspecting = Boolean(inspection && inspection.active);
-  // The shared beta workspace (BETA_SIMULATION=enabled) is the main view unless local inspection is active.
+  // The beta simulation is active when chosen in the Workspace switch (and local inspection is not active).
   const sharedBeta = Boolean(window.JARC_BETA) && !inspecting;
+  const workspace = inspecting ? null : window.JARC_SERVER || null;
 
   const style = document.createElement('style');
   style.textContent = '.signed-in-as{font-size:11px;color:#6c7e80}.signout-form{margin:0}.users-table{min-width:0}.users-table td,.users-table th{font-size:11px}.users-table select{margin:0;padding:6px 8px;font-size:11px}.users-table .self{color:#8a9a9e}'
@@ -37,10 +40,15 @@
       demoRole.querySelector('select').setAttribute('aria-label', 'Simulation view (shared beta test data)');
     }
   }
+  const bottom = document.querySelector('.sidebar-bottom');
   if (sharedBeta) {
-    const bottom = document.querySelector('.sidebar-bottom');
     bottom.childNodes[1].textContent = ' Shared beta workspace';
     bottom.querySelector('small').textContent = 'Test data saved on the server';
+  } else if (workspace) {
+    bottom.childNodes[1].textContent = ' My workspace';
+    bottom.querySelector('small').textContent = 'Saved on the server · access from your account';
+    const save = document.querySelector('.save');
+    if (save) save.lastChild.textContent = ' Saved';
   }
   const avatar = document.querySelector('.avatar');
   avatar.textContent = me.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?';
@@ -58,6 +66,22 @@
     preview.textContent = 'Preview views';
     preview.onclick = openPreviewChoices;
     right.insertBefore(preview, who);
+  }
+  // My workspace and the beta simulation are separate: one per page load, switched here.
+  if (workspace && me.beta) {
+    const label = document.createElement('label');
+    label.className = 'workspace-switch';
+    label.innerHTML = `Workspace<select id="workspace-switch" aria-label="Workspace"><option value="mine" ${workspace.simulated ? '' : 'selected'}>My workspace</option><option value="beta" ${workspace.simulated ? 'selected' : ''}>Beta simulation</option></select>`;
+    right.insertBefore(label, right.firstChild);
+    label.querySelector('select').onchange = e => workspace.switchTo(e.target.value);
+  }
+  if (workspace) {
+    const settings = document.createElement('button');
+    settings.className = 'secondary';
+    settings.id = 'settings';
+    settings.textContent = 'Settings';
+    settings.onclick = openSettings;
+    right.insertBefore(settings, who);
   }
   if (inspecting) showInspectionBanner();
   if (sharedBeta) showBetaBanner();
@@ -80,7 +104,7 @@
 
   function openPreviewChoices() {
     open(`<div class="tagline">BETA INSPECTION</div><h2>Preview views</h2>
-      <p>Try the Requestor, Admin, and Developer views on <strong>local sample data</strong> kept only in this browser, separate from your normal records${window.JARC_BETA ? ' and from the shared beta workspace' : ''}. Your account and real role (${esc(me.role)}) do not change, and nothing is sent to the server. Admin and Developer actions are simulated on the sample data only.</p>
+      <p>Try the Requestor, Admin, and Developer views on <strong>local sample data</strong> kept only in this browser, separate from your normal records${me.beta ? ' and from the shared beta workspace' : ''}. Your account and real role (${esc(me.role)}) do not change, and nothing is sent to the server. Admin and Developer actions are simulated on the sample data only.</p>
       <div class="preview-choices">${inspection.views.map(v => `<button class="secondary" data-preview="${v}">Preview as ${v}</button>`).join('')}</div>`);
     document.querySelectorAll('[data-preview]').forEach(b => b.onclick = () => inspection.enter(b.dataset.preview));
   }
@@ -93,7 +117,7 @@
     banner.innerHTML = `<strong>Beta simulation — test data</strong><span id="beta-detail"></span><div class="actions"><button class="secondary" id="reset-beta">Reset beta workspace</button></div>`;
     document.querySelector('main').insertBefore(banner, document.querySelector('main').firstChild);
     // The current view comes from the beta client (the selector only shows it once the shared records have loaded).
-    const describe = v => `Shared test records saved on the server for everyone in the beta. You are simulating the ${v} view${v === 'Developer' ? ' as sample developer Miguel Santos' : ''}; your account and real role (${me.role}) do not change. Email and calendar are not connected.`;
+    const describe = v => `Shared test records saved on the server for everyone in the beta, separate from My workspace. You are simulating the ${v} view${v === 'Developer' ? ' as sample developer Miguel Santos' : ''}; your account and real role (${me.role}) do not change, and simulated views give no access to real tickets. Nothing here is emailed.`;
     $('#beta-detail').textContent = describe(window.JARC_BETA.view);
     $('#demo-role').addEventListener('change', e => { $('#beta-detail').textContent = describe(e.target.value); });
     $('#reset-beta').onclick = () => {
@@ -122,6 +146,37 @@
     $('#exit-inspection').onclick = () => inspection.exit();
     $('#reset-sample').onclick = () => { if (confirm('Reset all inspection sample data in this browser? Your normal records are not affected.')) inspection.reset(); };
   }
+
+  // Your own settings: email reminders are opt-in, and only sent when the server has email delivery enabled.
+  async function openSettings() {
+    open('<div class="tagline">SETTINGS</div><h2>Your settings</h2><p>Loading…</p>');
+    let prefs;
+    try { prefs = await api('GET', '/api/v1/me/preferences'); }
+    catch (err) { return open(`<div class="tagline">SETTINGS</div><h2>Your settings</h2><div class="banner">${esc(message(err))}</div>`); }
+    const on = prefs.emailDelivery === 'enabled';
+    open(`<div class="tagline">SETTINGS</div><h2>Your settings</h2><p>Signed in as ${esc(me.displayName)} (${esc(me.email)}) · ${esc(me.role)}. Your role is set by an Admin.</p>
+      <h3>Reminders</h3><p>Due-date reminders, overdue alerts, pending approvals, and escalations always appear in the app (the bell). Dates use ${esc((me.deadlines || {}).timezone || 'Asia/Manila')} time.</p>
+      <form id="prefs-form"><label class="task"><input type="checkbox" name="emailReminders" ${prefs.emailReminders ? 'checked' : ''}>Also email me reminders and escalations (ticket number and reminder type only, with a sign-in link)</label>
+      <p class="read-only">${on ? 'Email delivery is enabled for this workspace.' : 'Email delivery is not enabled for this workspace yet, so no emails are sent. Your choice is saved for when it is.'}</p>
+      <div class="actions"><button class="primary">Save settings</button></div></form>`);
+    $('#prefs-form').onsubmit = async e => {
+      e.preventDefault();
+      try { await api('PATCH', '/api/v1/me/preferences', { emailReminders: e.target.elements.emailReminders.checked }); toast('Settings saved'); close(); }
+      catch (err) { toast(message(err)); }
+    };
+  }
+
+  // A role or access change by an Admin applies on the server at once. When you come back to this page, reload it if
+  // your role changed, so the screens match what the server now allows. A disabled account is signed out.
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible') return;
+    try {
+      const res = await fetch('/api/v1/me', { credentials: 'same-origin' });
+      if (res.status === 401) { location.href = '/auth/signin'; return; }
+      const data = await res.json();
+      if (data.user && data.user.role !== me.role) { toast(`Your role is now ${data.user.role}. Reloading…`); setTimeout(() => location.reload(), 800); }
+    } catch {}
+  });
 
   async function api(method, url, body) {
     const res = await fetch(url, { method, credentials: 'same-origin', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });

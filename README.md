@@ -99,20 +99,67 @@ For the beta, the app registration's enterprise application must have **Assignme
 - The cookie is `HttpOnly` and `SameSite=Lax`, and also `Secure` on https.
 - Changes are only accepted from the app's own address (`APP_BASE_URL`).
 
-> **Current limitation: this is not secure multi-user ticketing yet.**
+> **Status: a beta, not yet a production system.**
 >
 > **Protected by the server:**
-> - who can open the app (Microsoft sign-in plus an invitation)
-> - roles
-> - sessions
-> - user management (Admins only)
+> - who can open the app (Microsoft sign-in plus admission policy)
+> - app roles, sessions, and user management (Admins only)
+> - **My workspace tickets**: ownership, assignment, and every read and write (see below)
 >
-> **Not yet production-ready:**
-> - **Tickets are still stored only in each person's browser**, not on the server. They are not shared between people or devices, and nothing on the server enforces who may read or change them.
-> - **Ticket ownership:** the Requestor name is pre-filled from the signed-in profile (read-only), and the Requestor list filters on that name. This is a display convenience, not access control.
-> - **Developer filtering:** the Developer view still uses the demo developer identity, so it does not reflect real assignments.
+> **Not yet production-ready:** no security review or penetration test has been done; attachments are not malware-scanned; audit history covers sign-in, user changes, and beta resets, with ticket activity kept on each ticket.
 >
-> Shared tickets with server-enforced ownership, assignment, and role rules arrive with the ticket API. Existing browser records and recovery safeguards are unchanged in both modes.
+> Records created before My workspace existed in a signed-in browser (in `localStorage`) are left untouched in that browser and are not imported.
+
+### My workspace: real roles and ticket ownership
+
+With sign-in on, **My workspace** is the main view. Its tickets, projects, comments, attachments, and notifications are stored on the server (`tickets`, `ticket_changes`, `attachments`, `files.*`, `notifications`). Access comes only from the signed-in account, read from the database on every request:
+
+| App role | Can see and act on |
+| --- | --- |
+| **Requestor** (default for every newly admitted member) | Their own requests and the projects, comments, attachments, and notifications that belong to them |
+| **Developer** | Work assigned to their account, and their own requests |
+| **Admin** | Everything in My workspace; assigns work to **active Developer accounts**; manages users |
+
+- **The server derives everything:** ownership comes from the session, never from the browser, and so do the roles and view. Another person's records answer *not found* in every route: lists, search, direct ticket URLs, actions, linked changes, attachment downloads, the activity feed, and notifications.
+- **Capacities:** a member acts in each capacity they hold on a ticket: Admin by role, Developer when assigned, Requestor as its owner. For example, an Admin who submits a request can also accept it.
+- **Assignment:** the developer list shows active Developer accounts only, never sample people. Work assigned to someone who later loses the Developer role or is disabled stays visible to Admins for reassignment.
+- **Role and access changes:** an Admin changes roles and access on the **Users** screen.
+  - They apply at once. Disabling an account ends its sessions, and an open page reloads with the new role when the person returns to it.
+  - Admins cannot change their own role or access, and the last active Admin can never be demoted or disabled.
+- **Numbering:** My workspace tickets are numbered from `JRC-2001` (changes from `CR-501`), apart from the beta simulation's numbers.
+- **Simulation is separate:** the header's **Workspace** switch chooses **My workspace** or **Beta simulation** (when enabled). Simulated views and sample people never grant anything in My workspace, and beta records are never converted into real tickets.
+
+### Due dates, reminders, and escalation
+
+- **Two dates:** the **requested target date** is the requestor's, set on the form. The **agreed delivery date** is the target the developer confirms when creating the project, and it changes only through project details or an approved scope change. Lists and details show both, with **Overdue** and **Due soon** labels and a summary of overdue, due-soon, and awaiting-decision tickets that doubles as a filter.
+- **Timezone:** dates are calendar days in `WORKSPACE_TIMEZONE` (default **Asia/Manila**).
+- **Reminders** are in-app notifications (the bell), created on the server. They never depend on a browser being open. Default thresholds, all whole days:
+
+| Situation | Who | When (default) | Variable |
+| --- | --- | --- | --- |
+| Delivery due soon | Assigned developer | 2 days before the agreed date | `REMINDER_DUE_SOON_DAYS` |
+| Delivery overdue | Assigned developer | The day after the agreed date | |
+| Overdue escalation | Admins | 2 days overdue | `REMINDER_ESCALATE_OVERDUE_DAYS` |
+| Delivery awaiting acceptance | Requestor | After 2 days | `REMINDER_ACCEPTANCE_DAYS` |
+| Acceptance escalation | Admins | After 5 days | `REMINDER_ESCALATE_ACCEPTANCE_DAYS` |
+| Request awaiting review, information requested, meeting awaiting confirmation, release pending, scope change awaiting agreement or approval | Whoever must act | After 2 days | `REMINDER_PENDING_DAYS` |
+
+- **Each reminder is sent once.** Its key is the record, the reminder, and the deadline or state it is about, so repeated runs, restarts, and several instances never duplicate it.
+  - A changed agreed date is a new deadline, so it gets its own reminders.
+  - Completed, released, cancelled, rejected, and on-hold work gets none.
+- **Scheduling:** every `REMINDER_INTERVAL_MINUTES` (default 5), one running instance holds a lease in `scheduler_locks` and scans current records.
+  - **Recovery:** if that instance stops, the lease expires (after about two intervals) and another takes over. After a restart, missed reminders are caught up on the next run.
+  - **Turning it off:** set `REMINDERS=disabled`.
+- **Simulation:** reminders for beta simulation records go only to the simulated inboxes and are never emailed.
+
+### Optional email (off by default)
+
+Email uses [Resend](https://resend.com)'s HTTPS API. It needs no Microsoft Entra, Graph, tenant, or consent changes, and no package.
+- **How to turn it on:** set `EMAIL_DELIVERY=resend`, `EMAIL_FROM`, and `RESEND_API_KEY` (Railway variables; never commit them). The server logs `Email: enabled` or `Email: disabled` at start-up, and **Settings** tells each person whether it's on.
+- **Who gets it:** only people who tick **Email me reminders** in **Settings**. It's off for everyone by default, and it's checked again before each send.
+- **What's sent:** reminders and escalations only. Each message has the ticket number, the kind of reminder, and a sign-in link: no summaries, descriptions, comments, or names.
+- **Delivery:** messages queue in `email_outbox` and retry with backoff. A provider failure never affects in-app notifications.
+- **Without it:** in-app reminders work fully with email disabled.
 
 ### Local configuration (development app registration)
 
@@ -145,11 +192,13 @@ Both commands read the same `.env` and print the target database name. They refu
 ```powershell
 npm.cmd run db:setup -- --confirm-db jarctech_ticket_dev
 npm.cmd run admin:bootstrap -- --email <first-admin-work-email> --confirm-db jarctech_ticket_dev
+npm.cmd run admin:bootstrap -- --email <existing-member-email> --confirm-db jarctech_ticket_dev --promote-existing
 ```
 
-- **`db:setup`** creates the `users`, `sessions`, and `events` collections with validators and indexes. It creates no users and is safe to re-run. Until it has run, `/readyz` reports `schema-missing`; the server itself never creates collections.
+- **`db:setup`** creates the sign-in (`users`, `sessions`, `events`), My workspace, reminder, email outbox, and beta collections with validators and indexes. It creates no users and is safe to re-run. Until it has run, `/readyz` reports `schema-missing`; the server itself never creates collections.
 - **`admin:bootstrap`** creates one `invited` Admin for that work email. The person becomes active on their first Microsoft sign-in with that email. Everyone else is invited from the **Users** screen, where Admins can also revoke a pending invitation.
-  - It always refuses once an Admin is active, and also refuses if that email already exists.
+  - It always refuses once an Admin is active. **Nobody ever becomes Admin by signing in**, including the first person.
+  - If the person already has an account (for example they were admitted as a Requestor under `tenant-members`), use `--promote-existing`. It promotes that active, signed-in account to Admin, applies at once, and is recorded in the audit log.
   - If the only Admin is a pending invitation (for example after a mistyped email), rerun it with `--replace-invitation`. This revokes the pending invitation and creates the new one. It never touches an Admin who has signed in.
 
 Then start with `npm.cmd start` and open http://localhost:4177. You'll see the sign-in page.
@@ -189,7 +238,7 @@ Don't set `PORT` or `HOST` in Railway; Railway provides `PORT`. Don't copy the l
 
 **Order matters:** `/readyz` stays not-ready until `npm run db:setup` has prepared the staging database, so run the approved `db:setup` for that database **before** the first deploy. Otherwise the health check fails and Railway keeps the deploy from going live. The Entra registration also needs the matching Web callback, `https://<railway-domain>/auth/callback`.
 
-**Limitation:** hosting on Railway does **not** make tickets shared. Tickets are still stored in each browser until the ticket API exists.
+**Optional variables** (defaults in brackets): `WORKSPACE_TIMEZONE` [Asia/Manila], `REMINDERS` [enabled], `REMINDER_INTERVAL_MINUTES` [5], `REMINDER_DUE_SOON_DAYS` [2], `REMINDER_ESCALATE_OVERDUE_DAYS` [2], `REMINDER_ACCEPTANCE_DAYS` [2], `REMINDER_ESCALATE_ACCEPTANCE_DAYS` [5], `REMINDER_PENDING_DAYS` [2], `EMAIL_DELIVERY` [disabled] with `EMAIL_FROM` and `RESEND_API_KEY` when it is `resend`.
 
 ## Checks
 
@@ -364,12 +413,17 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `public/inspection.js` | Beta inspection mode (sent only when `INSPECTION_MODE=enabled`): preview view, isolated sample-data storage, exit, and reset |
 | `public/workflow-core.js` | Ticket, project, and linked-change workflow rules (view and status checks), shared by the browser and the server |
 | `public/sample-data.js` | Sample records (local demo, inspection, and the beta workspace seed) and their illustrative dated schedule |
-| `public/beta-store.js` | Shared beta workspace client (sent only when `BETA_SIMULATION=enabled`): loading, saving, conflicts, failed saves, refresh, and reset |
-| `server/beta/index.cjs` | Shared beta workspace API (`/api/v1/beta/*`): versioned writes, repeated-submission protection, actor and view in activity, search, seed, and reset |
-| `server/beta/attachments.cjs`, `public/attachment-rules.js` | Beta attachments: GridFS storage, content checks, safe downloads, claiming files for a save, abandoned-upload cleanup; shared limits and safe names |
-| `server/beta/notifications.cjs` | Beta in-app notifications: who is notified for each action, simulated inboxes, per-member read state, duplicate prevention |
+| `public/workspace-store.js` | Signed-in workspace client (My workspace, or the beta simulation chosen in the Workspace switch): loading, saving, conflicts, failed saves, refresh, search, uploads, and reset |
+| `server/workspace/engine.cjs` | Shared ticket workspace engine: versioned writes, repeated-submission protection, capacities, search, and not-found for anything a member may not see |
+| `server/work/index.cjs` | My workspace policy (`/api/v1/work/*`): visibility and capacities from the account's role, ownership, and assignment; active Developer accounts |
+| `server/beta/index.cjs` | Beta simulation policy (`/api/v1/beta/*`): simulated views on shared test data, seed, and reset |
+| `server/workspace/attachments.cjs`, `public/attachment-rules.js` | Attachments: GridFS storage per workspace, content checks, safe downloads that follow ticket access, abandoned-upload cleanup; shared limits and safe names |
+| `server/workspace/notifications.cjs` | In-app notifications and reminders: account inboxes (My workspace) or simulated inboxes (beta), per-member read state, duplicate prevention |
+| `public/deadline-core.js`, `server/workspace/reminders.cjs` | Requested and agreed dates, due-soon/overdue/awaiting rules (Asia/Manila calendar days); the leased reminder scheduler |
+| `server/workspace/email.cjs` | Optional reminder email through Resend (`EMAIL_DELIVERY=resend`), opt-in per person, with an outbox and retries |
 | `public/list-filter.js`, `public/list-view.js` | Ticket and project list search and filters (shared rules), result count, pages, and empty, loading, and error states |
-| `public/beta-features.js`, `public/features.css` | Notifications panel and badge, and the attachment uploader (sent only when `BETA_SIMULATION=enabled`) |
+| `public/workspace-features.js`, `public/features.css` | Notifications panel and badge, attachment uploader, deadline labels, and the attention summary (signed-in mode) |
+| `scripts/work-walkthrough.mjs` | Real-browser walkthrough of My workspace roles, ownership, assignment, dates, reminders, role changes, and simulation separation (`npm run walkthrough:work`) |
 | `scripts/beta-features-walkthrough.mjs` | Real-browser walkthrough of attachments, notifications, and search with two signed-in contexts (`npm run walkthrough:features`) |
 | `scripts/beta-seed.cjs`, `scripts/beta-walkthrough.mjs` | Explicit beta seed command (`npm run beta:seed`) and the beta real-browser walkthrough (`npm run walkthrough:beta`) |
 | `scripts/inspection-walkthrough.mjs` | Optional per-flow browser walkthrough of every workflow in inspection mode (`npm run walkthrough:inspection`) |
@@ -388,11 +442,11 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 
 ## Prototype boundaries
 
-All records are in this browser's localStorage (`jarc-helpdesk-v1`), not on the server. Separate browsers, devices, hostnames, and ports have separate data. The ZIP includes code and sample data, not your browser's working records. Existing local records are preserved; tasks without dates are labeled unscheduled. Fresh demo schedules are illustrative, not agreed business commitments.
+Without sign-in (the local demo), all records are in this browser's localStorage (`jarc-helpdesk-v1`), not on the server. Separate browsers, devices, hostnames, and ports have separate data. The ZIP includes code and sample data, not your browser's working records. Existing local records are preserved; tasks without dates are labeled unscheduled. Fresh demo schedules are illustrative, not agreed business commitments.
 
 If the stored records cannot be read or are missing required fields, the app opens a recovery screen instead of loading sample data. The original value is left untouched, an exact copy is saved under a `jarc-helpdesk-v1-backup-<timestamp>` key when possible, and automatic saving is paused. You can download the stored value, try again, or explicitly reset to sample data; backups are kept after a reset. If a save fails (for example, storage is full), the app warns that recent changes exist only in the open tab.
 
-Microsoft Entra sign-in and server-side roles exist, but they control only who can open the app and who can manage users. Ticket records are still browser-local, so ticket permissions are not enforced by the server yet. Shared ticket storage and server-enforced ticket permissions, file uploads, and email/calendar delivery are future phases. Do not use this as a production multi-user system until those phases are built.
+With Microsoft Entra sign-in, My workspace tickets are stored on the server with server-enforced roles and ownership (see above). Calendar integration is not built, and email is optional and off by default. It is a beta: do not treat it as a production system until it has had a security review.
 
 The current request form fields are intentionally retained. Category-specific forms await the owner's category definitions.
 

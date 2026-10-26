@@ -26,7 +26,19 @@ function person(n) { return n ? `<span class="person"><span class="mini-avatar">
 // Download links for files attached to an activity entry (shared beta workspace). Downloads require sign-in.
 function fileLinks(list) {
   if (!list || !list.length) return '';
-  return `<ul class="file-links">${list.map(f => `<li><a href="/api/v1/beta/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(AttachmentRules.formatSize(f.size))}</small></li>`).join('')}</ul>`;
+  return `<ul class="file-links">${list.map(f => `<li><a href="${window.JARC_SERVER ? window.JARC_SERVER.base : '/api/v1/beta'}/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(AttachmentRules.formatSize(f.size))}</small></li>`).join('')}</ul>`;
+}
+
+// Agreed delivery date with an overdue or due-soon label, in the workspace timezone (Asia/Manila by default).
+const deadlineSettings = { ...DeadlineCore.DEFAULTS, ...(window.JARC_SESSION && window.JARC_SESSION.deadlines || {}) };
+const workspaceToday = () => DeadlineCore.today(new Date(), deadlineSettings.timezone);
+function deadlineChip(t) {
+  const l = DeadlineCore.label(t, workspaceToday(), deadlineSettings);
+  return l && l.state !== 'on-track' ? ` <span class="deadline ${l.state}">${esc(l.text)}</span>` : '';
+}
+function dueText(t) {
+  const due = DeadlineCore.dueDate(t);
+  return due ? esc(DeadlineCore.formatDate(due)) + deadlineChip(t) : 'Not agreed yet';
 }
 
 // Side drawer dialog.

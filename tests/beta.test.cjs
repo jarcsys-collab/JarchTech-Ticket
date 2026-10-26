@@ -87,7 +87,7 @@ test('authorization: sign-in, same origin, valid view, and the capability flag a
   assert.equal((await post('/api/v1/beta/tickets', A, { view: 'Owner', requestId: requestId(), input: newRequest() })).status, 400);
   assert.equal((await post('/api/v1/beta/tickets', A, { view: 'Requestor', requestId: 'x', input: newRequest() })).status, 400, 'request id required');
   const page = await call('/', { cookie: A });
-  assert.match(page.text, /"beta":true/); assert.match(page.text, /<script src="beta-store\.js"><\/script>/);
+  assert.match(page.text, /"beta":true/); assert.match(page.text, /<script src="workspace-store\.js"><\/script>/);
   // A server without the capability does not expose the workspace at all.
   const otherPort = await freePort();
   const plain = await start(loadConfig({ NODE_ENV: 'test', PORT: String(otherPort), MONGODB_URI: mongod.getUri(), MONGODB_DB_NAME: DB, AUTH_MODE: 'entra', ACCESS_POLICY: 'tenant-members', ENTRA_TENANT_ID: TENANT, ENTRA_CLIENT_ID: CLIENT, ENTRA_CLIENT_SECRET: SECRET, APP_BASE_URL: `http://localhost:${otherPort}`, SESSION_SECRET: 'beta-workspace-session-secret-0123456789ab' }), { log: { log() {}, error() {} }, oidc: { issuer: entra.issuer, allowInsecure: true } });

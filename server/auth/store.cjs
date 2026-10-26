@@ -167,7 +167,13 @@ function createStore(db, { now = () => new Date() } = {}) {
     return publicUser({ ...target, ...set });
   }
 
-  return { admit, createSession, getSession, deleteSession, listUsers, inviteUser, updateUser, publicUser, record };
+  // The person's own settings (currently only email reminders, which are off unless they turn them on).
+  async function setPreferences(user, { emailReminders }) {
+    await users.updateOne({ _id: user._id }, { $set: { emailReminders: emailReminders === true, updatedAt: now() } });
+    await record('user.preferences', { actorId: user._id, subjectId: user._id, emailReminders: emailReminders === true });
+  }
+
+  return { setPreferences, admit, createSession, getSession, deleteSession, listUsers, inviteUser, updateUser, publicUser, record };
 }
 
 module.exports = { ABSOLUTE_MS, AUTO_ADMIT_ROLE, CONSUMER_TENANT, IDLE_MS, StoreError, createStore, isGuest };

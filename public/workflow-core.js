@@ -28,12 +28,13 @@
   };
   const isDate = v => TL.day(v) !== null;
 
-  // Who the caller is acting as. ctx: { view, isRequester(ticket) }.
+  // Who the caller is acting as. ctx: { view, isRequester(ticket), isAssignee(ticket), developer(input), owners }.
+  // The beta workspace and local modes act as the sample developer; My workspace supplies real-account checks.
   function roles(ctx, ticket) {
     if (!VIEWS.includes(ctx.view)) fail('invalid', 'Choose a Requestor, Admin, or Developer view.');
     return {
       admin: ctx.view === 'Admin',
-      dev: ctx.view === 'Developer' && ticket.dev === SAMPLE_DEVELOPER,
+      dev: ctx.view === 'Developer' && (ctx.isAssignee ? ctx.isAssignee(ticket) : ticket.dev === SAMPLE_DEVELOPER),
       req: ctx.view === 'Requestor' && (!ctx.isRequester || ctx.isRequester(ticket))
     };
   }
@@ -48,11 +49,11 @@
     }
     return '';
   }
-  function readTask(input) {
+  function readTask(input, owners = people) {
     const task = {};
     for (const key of ['title', 'requirement', 'criteria', 'start', 'end', 'owner']) task[key] = String(input?.[key] ?? '').trim();
     if (task.title.length > 150) fail('invalid', 'Task name is too long (maximum 150 characters).');
-    if (task.owner && !people.includes(task.owner)) fail('invalid', 'Choose a task owner from the sample developers.');
+    if (task.owner && !owners.includes(task.owner)) fail('invalid', owners === people ? 'Choose a task owner from the sample developers.' : 'Choose a task owner from the active developers.');
     return task;
   }
 
@@ -61,7 +62,8 @@
     const t = { ...input };
     text(t.title, 'Request summary', { max: 150 });
     text(t.description, 'Request description');
-    return { ticket: { ...t, id: nextId, status: 'Submitted', priority: 'Medium', dev: '', tasks: [], history: [] }, notes: ['Ticket submitted. Admin notified.'] };
+    // date is the requestor's requested target; requestedDate keeps it after an agreed delivery date replaces date.
+    return { ticket: { ...t, id: nextId, status: 'Submitted', priority: 'Medium', dev: '', tasks: [], history: [], requestedDate: t.date }, notes: ['Ticket submitted. Admin notified.'] };
   }
 
   // Applies one ticket action. Returns the notes to add to the ticket's activity, in order.
@@ -110,11 +112,13 @@
         if (FINAL.includes(t.status)) fail('state', 'This ticket is no longer active');
         const d = String(input.dev || '');
         if (!d) fail('invalid', 'Choose a developer first');
-        if (!people.includes(d)) fail('invalid', 'Choose one of the sample developers.');
+        // Real accounts: ctx.developer resolves an active Developer account to { dev: name, devId }.
+        const assignee = ctx.developer ? ctx.developer(d) : people.includes(d) ? { dev: d } : null;
+        if (!assignee) fail('invalid', ctx.developer ? 'Choose an active Developer account.' : 'Choose one of the sample developers.');
         if (!PRIORITIES.includes(input.priority)) fail('invalid', 'Choose a priority.');
-        t.dev = d; t.priority = input.priority;
+        Object.assign(t, assignee); t.priority = input.priority;
         if (EARLY.includes(t.status)) t.status = 'Assigned';
-        return [`Admin assigned ${d}. Priority: ${t.priority}.`];
+        return [`Admin assigned ${t.dev}. Priority: ${t.priority}.`];
       }
       case 'schedule-meeting': {
         allow(dev);
@@ -140,13 +144,14 @@
         allow(dev);
         inState(!t.project && ['Assigned', 'Meeting scheduled'].includes(t.status), t.project ? 'This ticket already has a project.' : undefined);
         const scope = scopeInput(input);
-        const tasks = (Array.isArray(input.tasks) ? input.tasks : []).map(readTask);
+        const tasks = (Array.isArray(input.tasks) ? input.tasks : []).map(x => readTask(x, ctx.owners));
         const error = validateProjectTasks(tasks, scope.date);
         if (error) fail('invalid', error);
+        // The confirmed target becomes the agreed delivery date (dueDate); the requested date is kept.
         Object.assign(t, {
           project: 'PRJ-' + t.id.split('-')[1], projectName: scope.projectName,
           requirements: scope.requirements, notes: scope.requirements, criteria: scope.criteria,
-          date: scope.date, status: 'Planning', tasks: tasks.map(x => ({ ...x, done: false }))
+          requestedDate: t.requestedDate || t.date, date: scope.date, dueDate: scope.date, status: 'Planning', tasks: tasks.map(x => ({ ...x, done: false }))
         });
         return ['Project created with agreed requirements, acceptance criteria, and a task timeline. Requestor added; admin notified.'];
       }
@@ -163,7 +168,7 @@
         inState(t.project && ACTIVE_WORK.includes(t.status));
         const index = input.index === null || input.index === undefined ? null : Number(input.index);
         if (index !== null && !t.tasks[index]) fail('invalid', 'That task no longer exists. Refresh and try again.');
-        const next = readTask(input.task);
+        const next = readTask(input.task, ctx.owners);
         const error = TL.validateTask(next); if (error) fail('invalid', error);
         if (next.end > t.date) fail('invalid', 'Task ends after the project target. Update project details first.');
         next.done = Boolean(input.task && input.task.done);
@@ -175,7 +180,7 @@
         inState(t.project && ACTIVE_WORK.includes(t.status));
         const next = scopeInput(input);
         if (t.tasks.some(x => x.end && x.end > next.date)) fail('invalid', 'Target date cannot precede a saved task end date.');
-        Object.assign(t, next);
+        Object.assign(t, next, { dueDate: next.date });
         return ['Project planning details updated.'];
       }
       case 'submit-acceptance': {
@@ -260,7 +265,7 @@
           notes: ['Admin approved change. Project plan updated.'],
           ticketEffect: ticket => {
             ticket.tasks.push({ title: `${c.id}: ${c.title}`, done: false });
-            if (!['Closed', 'Released'].includes(ticket.status)) ticket.date = c.date;
+            if (!['Closed', 'Released'].includes(ticket.status)) { ticket.date = c.date; ticket.dueDate = c.date; }
             return [`${c.id} approved and added to the project plan. Revised change target: ${c.date}.`];
           }
         };

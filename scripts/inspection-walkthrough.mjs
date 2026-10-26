@@ -144,7 +144,7 @@ try {
     entra.signInNext(account(1, 'Rhea Requestor', 'rhea@jarc.example'));
     await loads(() => w(`__w.click('a.primary'); true`));
     check('real Microsoft sign-in (mock) admits a tenant member as Requestor', await w(`location.pathname==='/' && document.querySelector('.signed-in-as').textContent==='Rhea Requestor · Requestor'`));
-    check('normal mode shows the normal browser record and a Preview views button, no inspection banner', await w(`!!document.querySelector('[data-id="JRC-7001"]') && !!document.querySelector('#preview-views') && !document.querySelector('#inspection-banner') && document.querySelector('.demo-role-label').hidden`));
+    check('normal mode shows My workspace (not the browser record) and a Preview views button, no inspection banner', await w(`!document.querySelector('[data-id="JRC-7001"]') && document.querySelector('.sidebar-bottom').textContent.includes('My workspace') && !!document.querySelector('#preview-views') && !document.querySelector('#inspection-banner') && document.querySelector('.demo-role-label').hidden`));
     await w(`__w.click('#preview-views'); true`); await sleep(200);
     check('Preview views explains sample data and offers Requestor, Admin, and Developer', await w(`__w.text().includes('sample data') && [...document.querySelectorAll('[data-preview]')].map(b=>b.dataset.preview).join()==='Requestor,Admin,Developer'`));
     await shot('01-preview-views.png');
@@ -299,7 +299,7 @@ try {
     await loads(() => w(`__w.click('#reset-sample'); true`));
     check('Reset sample data (confirmed) reloads fresh sample data', dialogs.some(d => d.includes('Reset all inspection sample data')) && await w(`!document.querySelector('#recovery') && !!__w.ticket('JRC-1042') && !__w.ticket('JRC-1043') && !Object.keys(localStorage).some(k=>k.startsWith('jarc-inspection:jarc-helpdesk-v1-backup-'))`));
     await loads(() => w(`__w.click('#exit-inspection'); true`));
-    check('Exit inspection returns to normal records and the real role, with no banner', await w(`!document.querySelector('#inspection-banner') && !!document.querySelector('[data-id="JRC-7001"]') && !document.querySelector('[data-id="JRC-1042"]') && document.querySelector('.demo-role-label').hidden && document.querySelector('#page-title').textContent==='My ticket'`));
+    check('Exit inspection returns to My workspace and the real role, with no banner', await w(`!document.querySelector('#inspection-banner') && !document.querySelector('[data-id="JRC-7001"]') && document.querySelector('.sidebar-bottom').textContent.includes('My workspace') && !document.querySelector('[data-id="JRC-1042"]') && document.querySelector('.demo-role-label').hidden && document.querySelector('#page-title').textContent==='My ticket'`));
     await loads(() => w(`__w.click('#sign-out'); true`));
     check('logout ends the session (signed-out page; the app is closed again)', await w(`location.pathname==='/auth/signed-out'`) && (await (async () => { await nav(`${origin}/`); return w(`location.pathname==='/auth/signin'`); })()));
     entra.signInNext(account(2, 'Ada Admin', 'ada@jarc.example'));

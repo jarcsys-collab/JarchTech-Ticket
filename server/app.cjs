@@ -1,10 +1,10 @@
 // HTTP handler: the browser prototype's static files, health and readiness checks, and (with AUTH_MODE=entra)
-// Microsoft sign-in in front of the app. Ticket records are still stored in the browser; no ticket API exists yet.
+// Microsoft sign-in in front of the app and its ticket APIs (My workspace and the beta simulation).
 const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { injectSession } = require('./auth/index.cjs');
-const { BETA_COLLECTIONS, CORE_COLLECTIONS } = require('./schema.cjs');
+const { BETA_COLLECTIONS, CORE_COLLECTIONS, WORK_COLLECTIONS } = require('./schema.cjs');
 
 const ROOT = path.join(__dirname, '..', 'public');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml' };
@@ -88,8 +88,8 @@ async function serveStatic(req, res, pathname, user, page) {
 // `auth` is null in demo mode, which serves the prototype exactly as before.
 // `now` is for tests of the readiness cache.
 function createServer({ database = null, auth = null, isShuttingDown = () => false, log = console, now } = {}) {
-  // Readiness requires the sign-in collections with Entra sign-in, plus the beta workspace collections when enabled.
-  const requireSchema = auth ? [...CORE_COLLECTIONS, ...(auth.beta ? BETA_COLLECTIONS : [])] : [];
+  // Readiness requires the sign-in and My workspace collections with Entra sign-in, plus the beta ones when enabled.
+  const requireSchema = auth ? [...CORE_COLLECTIONS, ...WORK_COLLECTIONS, ...(auth.beta ? BETA_COLLECTIONS : [])] : [];
   const health = createHealth({ database, requireSchema, isShuttingDown, log, now });
   return http.createServer(async (req, res) => {
     const pathname = (req.url || '/').split('?')[0];
