@@ -2,7 +2,7 @@
 const TL = TicketTimeline;
 $('#demo-role').onchange = e => {
   role = e.target.value;
-  view = 'Tickets'; query = ''; filter = 'All statuses'; layout = 'table';
+  view = 'Tickets'; resetListFilters(); layout = 'table'; // a new view starts from an unfiltered list
   close(); render();
 };
 
