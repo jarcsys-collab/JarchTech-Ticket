@@ -110,7 +110,7 @@ try {
   mongo = new MongoClient(mongod.getUri());
   const db = mongo.db('jarctech_inspection_walkthrough');
   await ensureSchema(db);
-  await db.collection('users').insertOne({ email: 'ada@jarc.example', role: 'Admin', status: 'active', displayName: 'Ada Admin', tenantId: TENANT, entraObjectId: account(2).oid, createdAt: new Date(), updatedAt: new Date() });
+  await db.collection('users').insertOne({ email: 'ada@jarc.example', role: 'Developer', status: 'active', displayName: 'Ada Admin', tenantId: TENANT, entraObjectId: account(2).oid, createdAt: new Date(), updatedAt: new Date() });
   entra = await startMockEntra({ tenantId: TENANT, clientId: CLIENT, clientSecret: 'inspection-walkthrough-secret' });
   const port = await freePort(), debug = await freePort();
   const origin = `http://localhost:${port}`;
@@ -190,7 +190,7 @@ try {
     // ---------- 3: Developer meetings and confirmation ----------
     flow = 3;
     await w(`__w.view('Developer'); true`); await sleep(200);
-    check('Developer view lists only assigned tickets', await w(`document.querySelectorAll('#records [data-id]').length===__w.data().tickets.filter(t=>t.dev==='Miguel Santos').length && !!document.querySelector('[data-id="JRC-1043"]')`));
+    check('Developer view lists every ticket (staff), like Admin', await w(`document.querySelectorAll('#records [data-id]').length===__w.data().tickets.length && !!document.querySelector('[data-id="JRC-1043"]')`));
     await w(`__w.open('JRC-1043');__w.click('#schedule');__w.set('#meeting-form [name=meeting]','2026-11-03T10:00');__w.set('#meeting-form [name=location]','JARC meeting room');__w.submit('#meeting-form');true`);
     check('Developer schedules the requirements meeting inside ticket details', await w(`__w.ticket('JRC-1043').status==='Meeting scheduled' && __w.ticket('JRC-1043').meetingConfirmed===false`));
     await w(`__w.view('Requestor');__w.open('JRC-1043');__w.click('#confirm-meeting');true`);
@@ -304,7 +304,7 @@ try {
     check('logout ends the session (signed-out page; the app is closed again)', await w(`location.pathname==='/auth/signed-out'`) && (await (async () => { await nav(`${origin}/`); return w(`location.pathname==='/auth/signin'`); })()));
     entra.signInNext(account(2, 'Ada Admin', 'ada@jarc.example'));
     await loads(() => w(`__w.click('a.primary'); true`));
-    check('a real Admin has Users outside inspection, but not while inspecting', await w(`!!document.querySelector('#manage-users')`) && await (async () => { await w(`localStorage.setItem('jarc-inspection-view','Developer'); true`); await reload(); return w(`!!document.querySelector('#inspection-banner') && !document.querySelector('#manage-users') && document.querySelector('.signed-in-as').textContent==='Ada Admin · Admin'`); })());
+    check('a real Developer has Users outside inspection, but not while inspecting', await w(`!!document.querySelector('#manage-users')`) && await (async () => { await w(`localStorage.setItem('jarc-inspection-view','Developer'); true`); await reload(); return w(`!!document.querySelector('#inspection-banner') && !document.querySelector('#manage-users') && document.querySelector('.signed-in-as').textContent==='Ada Admin · Developer'`); })());
     check('no page errors', errors.length === 0, errors.join(' | '));
   } catch (err) {
     if (!interrupted) check('walkthrough crashed', false, err.stack);

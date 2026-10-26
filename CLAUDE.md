@@ -8,10 +8,10 @@ Read README.md, docs/REFERENCE-CHANGES.md, docs/BUILD-PLAN.md, and docs/WORKFLOW
 
 - Product name: JarcTech Ticket. Keep JARC teal branding.
 - Sidebar has ticket and project entries only. Do not restore standalone Meetings, Change requests, or Kanban tabs.
-- Admin sees all requestors' received tickets. Requestors see their own tickets. Developers see assigned tickets.
+- Roles (finalized by the owner): Requestors see and act on their own tickets. Admins see and manage all tickets and do delivery work. Developers can do everything Admins can, plus exclusive user and role management (the highest role; no separate Owner role).
 - Keep the current request form fields until the owner defines type/category-specific forms.
-- Admin reviews, sets priority, assigns developers, requests clarification, or rejects with a reason.
-- Developer schedules a requirements/planning meeting within ticket details. Requestor confirms it.
+- Admins or Developers review, set priority, assign work to active Admins or Developers, request clarification, or reject with a reason.
+- Staff (the assignee, an Admin or Developer) schedule a requirements/planning meeting within ticket details. Requestor confirms it.
 - Project creation has two steps: named scope/requirements/criteria, then dated tasks/timeline.
 - A project is linked once to its original ticket. The requestor participates in monitoring and acceptance.
 - Clicking a project opens a Gantt view listing tasks, requirements, owners, and start/end dates.
