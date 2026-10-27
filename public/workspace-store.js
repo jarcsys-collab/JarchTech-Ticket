@@ -65,7 +65,7 @@
   async function load() {
     status = 'loading';
     try {
-      const res = await request('GET', BASE + '/workspace');
+      const res = await request('GET', BASE + '/workspace?view=' + encodeURIComponent(view));
       if (!res.ok) throw new Error(explain(res));
       status = 'ready'; lastLoaded = Date.now();
       api.ready = true;
@@ -84,7 +84,7 @@
     if (busy || status === 'loading') return;
     if (!api.ready) return load();
     try {
-      const res = await request('GET', BASE + '/workspace');
+      const res = await request('GET', BASE + '/workspace?view=' + encodeURIComponent(view));
       if (!res.ok) throw new Error(explain(res));
       lastLoaded = Date.now();
       hooks.replace(res.data);
@@ -120,7 +120,7 @@
     simulated,
     base: BASE,
     name: simulated ? 'Beta simulation' : 'My workspace',
-    developers: [], // My workspace: active Developer accounts (Admins and Developers only)
+    developers: [], // My workspace: active Developers (and, for an Admin, themselves): assignees and task owners
     // Switches workspace for this browser and reloads, so each page load works in exactly one workspace.
     switchTo(next) {
       try { localStorage.setItem(WORKSPACE_KEY, next === 'beta' ? 'beta' : 'mine'); } catch {}
@@ -141,7 +141,7 @@
     },
     refresh,
     search: params => read(BASE + '/search?' + new URLSearchParams(params)),
-    ticket: id => read(BASE + '/tickets/' + encodeURIComponent(id)),
+    ticket: id => read(BASE + '/tickets/' + encodeURIComponent(id) + '?view=' + encodeURIComponent(view)),
     unread: v => read(BASE + '/notifications/unread?view=' + encodeURIComponent(v)),
     notifications: (v, before) => read(BASE + '/notifications?' + new URLSearchParams({ view: v, ...(before ? { before } : {}) })),
     async markRead(v, ids) {
@@ -184,7 +184,7 @@
     },
     async reset() {
       if (!simulated) return false;
-      const result = await send('/api/v1/beta/reset', { confirm: 'RESET' }, () => refresh());
+      const result = await send('/api/v1/beta/reset', { confirm: 'RESET', view }, () => refresh());
       if (!result) return false;
       hooks.replace(result);
       return true;

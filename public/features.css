@@ -59,3 +59,44 @@ tr[data-id]:focus-visible td{outline:2px solid #8ed8da;outline-offset:-2px;backg
 .requested{color:#8a9a9e}
 .workspace-switch{font-size:9px;letter-spacing:.5px;color:#7a9295;display:flex;align-items:center;gap:8px;white-space:nowrap}
 .workspace-switch select{font-size:11px;min-width:140px;margin:0;padding:7px 10px;background:#f2f8f8}
+/* Request types, the Admin overview, agreements, evidence, and completion confirmations */
+.type-pill{font-size:9px}
+.overview{border:1px solid #e3eaea;border-radius:12px;padding:16px 18px;margin:0 0 22px;background:white}
+.overview-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:6px 16px}
+.overview-head h2{font-size:15px;margin:0;color:#304b52}
+.overview-head .read-only{margin:0}
+.overview-table{min-width:520px;margin-top:10px}
+.overview-table td{padding:8px 10px;vertical-align:middle}
+.overview-table td small{display:block;color:#8a9a9e;font-size:10px;margin-top:2px}
+.overview-table tr.ready td:first-child b{color:#007f86}
+.overview-table tr.overdue-row td:first-child b{color:#c0574d}
+.overview-count{min-width:44px;padding:6px 10px;border:1px solid #d9e8e8;border-radius:8px;background:#f2fbfb;font-weight:650;color:#0b5c60;font-size:13px}
+.overview-count.zero{background:white;color:#a0afb1;font-weight:500}
+.overview-count:hover,.overview-count:focus-visible{border-color:var(--teal)}
+.overview-count[aria-pressed=true]{outline:2px solid var(--teal);outline-offset:1px}
+.conf-cell{white-space:nowrap}
+.conf{display:inline-block;font-size:10px;margin-right:6px;color:#a0afb1}
+.conf.yes{color:#008f87;font-weight:600}
+.workflow-panel{margin-top:6px}
+.workflow-panel h4{margin:10px 0 4px;font-size:12px;color:#4d767c}
+.agreement{border:1px solid #dceaea;border-radius:10px;padding:12px 14px;margin:8px 0}
+.agreement.locked{border-color:#9fd9d6;background:#f6fcfc}
+.agreement-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.agreement-head small{color:#8a9a9e;font-size:10px}
+.agreement .scope-summary{margin:10px 0}
+.agreement-versions summary,.corrections summary{cursor:pointer;font-size:12px;font-weight:600;color:#526b71;margin:8px 0}
+.confirmations{list-style:none;padding:0;margin:10px 0}
+.confirmations li{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px;padding:7px 0;border-bottom:1px solid #edf2f2;font-size:12px}
+.confirmations li>span:first-child{min-width:200px;color:#5c777d}
+.confirmations small{color:#8a9a9e;font-size:10px}
+.confirmed{color:#008f87;font-weight:650}
+.pending{color:#a07415;font-weight:600}
+.closure-gate{font-size:12px;background:#f2f8f8;border-radius:8px;padding:10px 12px;color:#4d6b71}
+.evidence-list{list-style:none;padding:0;margin:8px 0}
+.evidence-list li{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:8px 10px;border:1px solid #e4ebeb;border-radius:8px;margin-bottom:6px;font-size:12px}
+.evidence-list a{color:#007f86;font-weight:600;overflow-wrap:anywhere}
+.evidence-list small{color:#93a4a7;font-size:10px}
+.evidence-list .remove-evidence{margin-left:auto;padding:5px 9px;font-size:10px}
+.summary-text{white-space:pre-line}
+.missing-steps{background:#fffaf0;border-color:#f0d48a;color:#7a5a12}
+@media(max-width:720px){.confirmations li>span:first-child{min-width:0;flex-basis:100%}}

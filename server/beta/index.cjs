@@ -2,9 +2,11 @@
 // attachments, notifications, and linked changes stored in the beta_* collections, shared by every signed-in member.
 // - The simulated view (Requestor, Admin, Developer) is chosen per request and only ever applies to these beta
 //   collections. It never changes real roles, never reaches My workspace records, and never emails anyone.
-// - Every member reads the whole shared workspace (test data); requestor actions apply to the member's own requests
-//   and the shared sample requests. Admin and Developer views both manage and deliver work, as the real roles do;
-//   the simulation never manages real accounts (the Developer view is labelled with the first sample developer).
+// - Each view acts as a fictional test identity, as the real roles do: the Requestor view owns the member's own and
+//   the sample requests; the Admin view ("Alex Admin") sees and manages every record and can assign work to itself;
+//   the Developer view (sample developer "Miguel Santos") sees and delivers only the work assigned to it. Because
+//   each view is a different identity, switching views demonstrates independent worker and Requestor confirmations.
+//   The simulation never manages real accounts.
 // The request handling itself is the shared engine in server/workspace/engine.cjs.
 const WorkflowCore = require('../../public/workflow-core.js');
 const SampleData = require('../../public/sample-data.js');
@@ -42,6 +44,10 @@ async function seedWorkspace(db, { replace = false, now = () => new Date() } = {
 }
 
 const view = v => { if (!WorkflowCore.VIEWS.includes(v)) throw new HttpError(400, 'invalid-view'); return v; };
+const owned = (user, t) => Boolean(t.requester && (t.requester.sample || t.requester.id === String(user._id)));
+// Admin: everything. Developer: work assigned to the sample developer. Requestor: own and sample requests.
+const scope = (user, v) => (v === 'Admin' ? {} : v === 'Developer' ? { dev: WorkflowCore.SAMPLE_DEVELOPER } : { $or: [{ 'requester.sample': true }, { 'requester.id': String(user._id) }] });
+const sees = (user, t, v) => v === 'Admin' || (v === 'Developer' ? t.dev === WorkflowCore.SAMPLE_DEVELOPER : owned(user, t));
 const policy = {
   label: 'Beta workspace',
   workspace: WORKSPACE,
@@ -51,17 +57,12 @@ const policy = {
   schema: BETA_COLLECTIONS,
   notSetUp: { error: 'beta-not-set-up', message: 'The shared beta workspace has not been set up yet.' },
   addressing: simulated,
-  // Shared test data: every signed-in beta member sees every beta record.
-  visible: async () => ({}),
-  canSee: async () => true,
-  // Lists follow the simulated view: Admin and Developer (staff) see every beta record; Requestor sees own and sample requests.
-  searchScope: async (user, params) => {
-    const v = view(params.get('view'));
-    if (v === 'Requestor') return { $or: [{ 'requester.sample': true }, { 'requester.id': String(user._id) }] };
-    return {};
-  },
-  // One capacity: the simulated view. Requestor actions apply to the member's own and the sample requests.
-  contexts: async (user, ticket, body) => [{ view: body.view, isRequester: t => Boolean(t.requester && (t.requester.sample || t.requester.id === String(user._id))) }],
+  // Records follow the simulated view, in lists, search, details, and actions (a missing or unknown view is refused).
+  // Attachment downloads carry no view; they follow the shared test data, which every beta member may read.
+  visible: async (user, v) => scope(user, view(v)),
+  canSee: async (user, t, v, purpose) => purpose === 'download' || sees(user, t, view(v)),
+  // One capacity: the simulated view, acting as its test identity.
+  contexts: async (user, ticket, body) => [WorkflowCore.simulatedContext(view(body.view), { isRequester: t => owned(user, t) })],
   creationView: body => view(body.view),
   reset: { phrase: RESET_PHRASE, event: 'beta.reset', seed: seedWorkspace }
 };

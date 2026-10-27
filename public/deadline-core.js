@@ -7,13 +7,13 @@
   const TL = typeof module !== 'undefined' ? require('./timeline-core.js') : root.TicketTimeline;
   const DEFAULTS = Object.freeze({
     timezone: 'Asia/Manila',
-    dueSoonDays: 2,            // remind the assigned developer this many days before the agreed delivery date
+    dueSoonDays: 2,            // remind the assigned worker this many days before the agreed delivery date
     escalateOverdueDays: 2,    // escalate to Admins once delivery is this many days overdue
-    acceptanceDays: 2,         // remind the requestor after a delivery has awaited acceptance this long
+    acceptanceDays: 2,         // remind the requestor after completed work has awaited their confirmation this long
     escalateAcceptanceDays: 5, // escalate to Admins after acceptance has waited this long
-    pendingDays: 2             // remind whoever must decide (review, meeting, information, release, scope change)
+    pendingDays: 2             // remind whoever must act (review, meeting, agreement, information, release, closure, scope change)
   });
-  // Statuses in which the agreed delivery date is the assigned developer's to meet. Other statuses pause or end it.
+  // Statuses in which the agreed delivery date is the assigned worker's to meet. Other statuses pause or end it.
   const DELIVERY = ['Assigned', 'Meeting scheduled', 'Planning', 'In progress'];
   const DAY_MS = 86400000;
 
@@ -36,13 +36,22 @@
     const left = days(todayDate, due);
     return { due, days: left, state: left < 0 ? 'overdue' : left <= settings.dueSoonDays ? 'due-soon' : 'on-track' };
   }
-  // Who must act next on a ticket, if it is waiting on a decision rather than on development.
+  // Who must act next on a ticket, if it is waiting on a decision or confirmation rather than on the work itself.
+  // 'developer' means the assigned worker (a Developer, or an Admin who assigned the work to themselves).
   function awaiting(t) {
-    if (t.status === 'Awaiting acceptance') return { who: 'requestor', what: 'acceptance' };
+    const c = t.completion || {};
+    const project = t.type === 'Project' || (!t.type && Boolean(t.project));
+    if (['Awaiting acceptance', 'Ready for release', 'Released'].includes(t.status)) {
+      if (!c.worker) return t.status === 'Awaiting acceptance' ? { who: 'requestor', what: 'acceptance' } : { who: 'developer', what: 'completion' };
+      if (!c.requestor) return { who: 'requestor', what: 'acceptance' };
+      if (t.status === 'Ready for release' && project) return { who: 'developer', what: 'release' };
+      return { who: 'admin', what: 'closure' };
+    }
     if (t.status === 'Waiting for information') return { who: 'requestor', what: 'information' };
     if (['Submitted', 'Under review'].includes(t.status)) return { who: 'admin', what: 'review' };
-    if (t.status === 'Ready for release') return { who: 'developer', what: 'release' };
-    if (t.meeting && !t.meetingConfirmed && !t.project && ['Assigned', 'Meeting scheduled'].includes(t.status)) return { who: 'requestor', what: 'meeting' };
+    if (t.meeting && !t.meetingConfirmed && !(t.agreements && t.agreements.length) && ['Assigned', 'Meeting scheduled', 'Planning', 'In progress'].includes(t.status)) return { who: 'requestor', what: 'meeting' };
+    const d = t.agreementDraft;
+    if (d && !(t.agreements && t.agreements.length)) return d.worker && !d.requestor ? { who: 'requestor', what: 'agreement' } : { who: 'developer', what: 'agreement' };
     return null;
   }
   function changeAwaiting(c) {
@@ -55,11 +64,14 @@
     'due-soon': d => `Delivery due ${d.days === 0 ? 'today' : `in ${d.days} day${d.days === 1 ? '' : 's'}`}`,
     overdue: () => 'Overdue: the agreed delivery date has passed',
     'escalate-overdue': d => `Escalated: delivery overdue by ${-d.days} days`,
-    acceptance: () => 'Reminder: delivery awaiting your acceptance',
-    'escalate-acceptance': () => 'Escalated: delivery acceptance is overdue',
+    acceptance: () => 'Reminder: completed work awaiting your confirmation',
+    'escalate-acceptance': () => 'Escalated: Requestor confirmation is overdue',
+    completion: () => 'Reminder: record your completion confirmation',
+    agreement: () => 'Reminder: requirements agreement awaiting confirmation',
+    closure: () => 'Reminder: both confirmations recorded, ready for Admin closure',
     information: () => 'Reminder: information requested from you',
     review: () => 'Reminder: request awaiting review',
-    release: () => 'Reminder: accepted delivery awaiting release',
+    release: () => 'Reminder: confirmed work awaiting release or handover',
     meeting: () => 'Reminder: planning meeting awaiting your confirmation',
     'change-agreement': () => 'Reminder: scope change awaiting your agreement',
     'change-approval': () => 'Reminder: scope change awaiting approval',
@@ -85,7 +97,7 @@
       if (age(t, now) >= settings.acceptanceDays) add('acceptance', 'requestor', since);
       if (age(t, now) >= settings.escalateAcceptanceDays) add('escalate-acceptance', 'admin', since);
     } else if (wait && age(t, now) >= settings.pendingDays) {
-      add(wait.what, wait.who, wait.what === 'meeting' ? `${since}|${t.meeting}` : since);
+      add(wait.what, wait.who, wait.what === 'meeting' ? `${since}|${t.meeting}` : wait.what === 'agreement' ? `${since}|${wait.who}` : since);
     }
     for (const c of changes) {
       const w = changeAwaiting(c);

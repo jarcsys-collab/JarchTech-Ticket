@@ -177,10 +177,10 @@ test('roles come only from the server: browser-supplied roles are ignored', asyn
   assert.equal((await users().findOne({ email: 'person2@jarc.example' })).role, 'Requestor');
 });
 
-test('user management is Developer-only: invite, change roles, disable, and no self-changes', async () => {
-  await store.inviteUser({ email: 'admin8@jarc.example', role: 'Developer' }, null);
+test('user management is Admin-only: invite, change roles, disable, and no self-changes', async () => {
+  await store.inviteUser({ email: 'admin8@jarc.example', role: 'Admin' }, null);
   const admin = (await signIn(person(8, { email: 'admin8@jarc.example', preferred_username: 'admin8@jarc.example' }))).session;
-  assert.ok(admin, 'invited Developer signed in');
+  assert.ok(admin, 'invited Admin signed in');
   const requestor = (await signIn(person(2))).session;
   assert.equal((await call('/api/v1/users')).status, 401);
   assert.equal((await call('/api/v1/users', { cookie: requestor })).status, 403);
@@ -190,7 +190,7 @@ test('user management is Developer-only: invite, change roles, disable, and no s
   assert.equal((await call('/api/v1/users', { method: 'POST', cookie: admin, body: { email: 'a@jarc.example', role: 'Requestor' }, headers: { Origin: 'https://evil.example' } })).status, 403, 'other origin');
   assert.equal((await call('/api/v1/users', { method: 'POST', cookie: admin, headers: { Origin: origin, 'Content-Type': 'text/plain' }, body: undefined })).status, 415);
 
-  const invited = await write('/api/v1/users', admin, { email: 'New.Person@JARC.example', role: 'Developer', displayName: 'New Person' });
+  const invited = await write('/api/v1/users', admin, { email: 'New.Person@JARC.example', role: 'Admin', displayName: 'New Person' });
   assert.equal(invited.status, 201); assert.equal(invited.json.user.email, 'new.person@jarc.example'); assert.equal(invited.json.user.status, 'invited');
   assert.equal((await write('/api/v1/users', admin, { email: 'new.person@jarc.example', role: 'Requestor' })).status, 409);
   assert.equal((await write('/api/v1/users', admin, { email: 'not-an-email', role: 'Requestor' })).status, 400);
@@ -203,54 +203,54 @@ test('user management is Developer-only: invite, change roles, disable, and no s
   assert.equal((await write(`/api/v1/users/${id('new.person@jarc.example')}`, admin, { status: 'active' }, 'PATCH')).json.error, 'invitation-not-accepted');
 
   // Role change applies on the person's next request.
-  assert.equal((await write(`/api/v1/users/${id('person2@jarc.example')}`, admin, { role: 'Developer' }, 'PATCH')).status, 200);
-  assert.equal((await call('/api/v1/me', { cookie: requestor })).json.user.role, 'Developer');
+  assert.equal((await write(`/api/v1/users/${id('person2@jarc.example')}`, admin, { role: 'Admin' }, 'PATCH')).status, 200);
+  assert.equal((await call('/api/v1/me', { cookie: requestor })).json.user.role, 'Admin');
   await write(`/api/v1/users/${id('person2@jarc.example')}`, admin, { role: 'Requestor' }, 'PATCH');
   // Disabling ends the person's sessions immediately.
   assert.equal((await write(`/api/v1/users/${id('person2@jarc.example')}`, admin, { status: 'disabled' }, 'PATCH')).status, 200);
   assert.equal((await call('/api/v1/me', { cookie: requestor })).status, 401);
   await write(`/api/v1/users/${id('person2@jarc.example')}`, admin, { status: 'active' }, 'PATCH');
 
-  // With two Developers, one may change the other. A Developer made Admin keeps ticket access but loses user
-  // management at once; Admins can never list, invite, change, enable, or disable accounts.
-  await store.inviteUser({ email: 'admin10@jarc.example', role: 'Developer' }, null);
+  // With two Admins, one may change the other. An Admin made Developer keeps ticket access but loses user
+  // management at once; Developers can never list, invite, change, enable, or disable accounts.
+  await store.inviteUser({ email: 'admin10@jarc.example', role: 'Admin' }, null);
   const admin2 = (await signIn(person(10, { email: 'admin10@jarc.example', preferred_username: 'admin10@jarc.example' }))).session;
-  assert.ok(admin2, 'second invited Developer signed in');
+  assert.ok(admin2, 'second invited Admin signed in');
   const admin2Id = String((await users().findOne({ email: 'admin10@jarc.example' }))._id);
   assert.equal((await call('/api/v1/users', { cookie: admin2 })).status, 200);
-  assert.equal((await write(`/api/v1/users/${admin2Id}`, admin, { role: 'Admin' }, 'PATCH')).status, 200);
-  assert.equal((await call('/api/v1/users', { cookie: admin2 })).status, 403, 'an Admin cannot list accounts');
-  assert.equal((await call('/api/v1/users', { cookie: admin2 })).json.error, 'developer-only');
-  assert.equal((await write('/api/v1/users', admin2, { email: 'c@jarc.example', role: 'Requestor' })).status, 403, 'an Admin cannot invite');
-  assert.equal((await write(`/api/v1/users/${id('person2@jarc.example')}`, admin2, { role: 'Developer' }, 'PATCH')).status, 403, 'an Admin cannot change roles');
-  assert.equal((await write(`/api/v1/users/${id('person2@jarc.example')}`, admin2, { status: 'disabled' }, 'PATCH')).status, 403, 'an Admin cannot disable accounts');
-  assert.equal((await write(`/api/v1/users/${adminId}`, admin2, { status: 'disabled' }, 'PATCH')).status, 403, 'an Admin cannot remove the remaining Developer');
-  assert.equal((await call('/api/v1/work/workspace', { cookie: admin2 })).status, 200, 'the Admin still manages tickets');
-  assert.ok(await db.collection('events').findOne({ type: 'user.updated', 'changes.role': 'Admin' }), 'role changes are audited');
+  assert.equal((await write(`/api/v1/users/${admin2Id}`, admin, { role: 'Developer' }, 'PATCH')).status, 200);
+  assert.equal((await call('/api/v1/users', { cookie: admin2 })).status, 403, 'a Developer cannot list accounts');
+  assert.equal((await call('/api/v1/users', { cookie: admin2 })).json.error, 'admin-only');
+  assert.equal((await write('/api/v1/users', admin2, { email: 'c@jarc.example', role: 'Requestor' })).status, 403, 'a Developer cannot invite');
+  assert.equal((await write(`/api/v1/users/${id('person2@jarc.example')}`, admin2, { role: 'Admin' }, 'PATCH')).status, 403, 'a Developer cannot change roles');
+  assert.equal((await write(`/api/v1/users/${id('person2@jarc.example')}`, admin2, { status: 'disabled' }, 'PATCH')).status, 403, 'a Developer cannot disable accounts');
+  assert.equal((await write(`/api/v1/users/${adminId}`, admin2, { status: 'disabled' }, 'PATCH')).status, 403, 'a Developer cannot remove the remaining Admin');
+  assert.equal((await call('/api/v1/work/workspace', { cookie: admin2 })).status, 200, 'the Developer still has their workspace');
+  assert.ok(await db.collection('events').findOne({ type: 'user.updated', 'changes.role': 'Developer' }), 'role changes are audited');
 });
 
-test('the last active Developer can never be demoted or disabled, even by simultaneous changes', async () => {
-  // Through the API a Developer can only change other people. This guard covers anything that reaches the store
-  // anyway, for example a former Developer acting on a stale view, or two Developers changing each other at once.
-  const onlyDev = await users().findOne({ email: 'admin8@jarc.example' });
-  assert.equal(await users().countDocuments({ role: 'Developer', status: 'active' }), 1);
+test('the last active Admin can never be demoted or disabled, even by simultaneous changes', async () => {
+  // Through the API a Admin can only change other people. This guard covers anything that reaches the store
+  // anyway, for example a former Admin acting on a stale view, or two Admins changing each other at once.
+  const onlyAdmin = await users().findOne({ email: 'admin8@jarc.example' });
+  assert.equal(await users().countDocuments({ role: 'Admin', status: 'active' }), 1);
   const actor = await users().findOne({ email: 'admin10@jarc.example' });
-  await assert.rejects(store.updateUser(String(onlyDev._id), { role: 'Admin' }, actor), { code: 'last-developer', status: 409 });
-  await assert.rejects(store.updateUser(String(onlyDev._id), { status: 'disabled' }, actor), { code: 'last-developer', status: 409 });
-  assert.equal((await users().findOne({ _id: onlyDev._id })).role, 'Developer');
-  // Two Developers remove each other at the same moment: at least one always remains active.
+  await assert.rejects(store.updateUser(String(onlyAdmin._id), { role: 'Developer' }, actor), { code: 'last-admin', status: 409 });
+  await assert.rejects(store.updateUser(String(onlyAdmin._id), { status: 'disabled' }, actor), { code: 'last-admin', status: 409 });
+  assert.equal((await users().findOne({ _id: onlyAdmin._id })).role, 'Admin');
+  // Two Admins remove each other at the same moment: at least one always remains active.
   const all = db.collection('users');
   for (let round = 0; round < 6; round++) {
-    await all.updateOne({ _id: onlyDev._id }, { $set: { role: 'Admin' } }); // leave exactly the two racing Developers
-    const make = n => ({ email: `race${round}-${n}@jarc.example`, role: 'Developer', status: 'active', displayName: 'Race', tenantId: 'race-tenant', entraObjectId: `race-${round}-${n}`, createdAt: new Date(), updatedAt: new Date() });
+    await all.updateOne({ _id: onlyAdmin._id }, { $set: { role: 'Developer' } }); // leave exactly the two racing Admins
+    const make = n => ({ email: `race${round}-${n}@jarc.example`, role: 'Admin', status: 'active', displayName: 'Race', tenantId: 'race-tenant', entraObjectId: `race-${round}-${n}`, createdAt: new Date(), updatedAt: new Date() });
     const { insertedIds } = await all.insertMany([make(1), make(2)]);
     const a = await all.findOne({ _id: insertedIds[0] }), b = await all.findOne({ _id: insertedIds[1] });
     const change = round % 2 ? { status: 'disabled' } : { role: 'Requestor' };
     const results = await Promise.allSettled([store.updateUser(String(a._id), change, b), store.updateUser(String(b._id), change, a)]);
     assert.ok(results.some(r => r.status === 'rejected'), 'at least one change is refused');
-    assert.ok(await all.countDocuments({ role: 'Developer', status: 'active' }) >= 1, `round ${round}: a Developer remains`);
+    assert.ok(await all.countDocuments({ role: 'Admin', status: 'active' }) >= 1, `round ${round}: a Admin remains`);
     await all.deleteMany({ _id: { $in: [a._id, b._id] } });
-    await all.updateOne({ _id: onlyDev._id }, { $set: { role: 'Developer' } });
+    await all.updateOne({ _id: onlyAdmin._id }, { $set: { role: 'Admin' } });
   }
 });
 

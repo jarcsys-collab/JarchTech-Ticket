@@ -59,7 +59,7 @@ async function signIn(n) {
   return res.setCookies.find(c => c.startsWith('jt_session=')).split(';')[0];
 }
 const upload = (cookie, name, bytes, headers = {}) => call('/api/v1/beta/attachments', { method: 'POST', cookie, raw: bytes, headers: { Origin: origin, 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(name), ...headers } });
-const ws = async cookie => (await call('/api/v1/beta/workspace', { cookie })).json;
+const ws = async (cookie, view = 'Admin') => (await call(`/api/v1/beta/workspace?view=${view}`, { cookie })).json;
 const ticket = async (cookie, id) => (await ws(cookie)).tickets.find(t => t.id === id);
 async function act(cookie, id, action, view, input = {}) {
   const t = await ticket(cookie, id);
@@ -67,7 +67,7 @@ async function act(cookie, id, action, view, input = {}) {
 }
 let rid = 0;
 const requestId = () => `features-${++rid}-${Date.now()}`;
-const request = (overrides = {}) => ({ title: 'FEATURETEST request', department: 'Sales', date: '2026-12-15', category: 'New feature', description: 'Feature test description.', criteria: '', ...overrides });
+const request = (overrides = {}) => ({ title: 'FEATURETEST request', type: 'Project', department: 'Sales', date: '2026-12-15', category: 'New feature', description: 'Feature test description.', criteria: '', ...overrides });
 const create = (cookie, input, extra = {}) => post('/api/v1/beta/tickets', cookie, { view: 'Requestor', requestId: requestId(), input: request(input), ...extra });
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('0000000dIHDR-test-image-bytes')]);
 const PDF = Buffer.from('%PDF-1.7\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n');
@@ -227,7 +227,7 @@ test('notifications: recipients, own actions, per-member read state, duplicates,
   const mine = adminA.items.find(n => n.record === id);
   assert.equal(mine.read, true, 'no unread alert for the submitter\'s own action');
   const list = (await notes(B, 'Admin')).json;
-  assert.equal(list.inbox, 'Admin inbox (simulated)');
+  assert.equal(list.inbox, 'Admin inbox (simulated) · work assigned to Alex Admin (Admin test identity)');
   const item = list.items.find(n => n.record === id);
   assert.deepEqual({ title: item.title, kind: item.kind, target: item.target, read: item.read, actor: item.actor, actorView: item.actorView }, { title: 'New request submitted', kind: 'ticket', target: 'ticket', read: false, actor: 'Tester 1', actorView: 'Requestor' });
   // Admin (B) assigns: developer and the submitter's own inbox are notified; the admin inbox is not.
@@ -235,7 +235,7 @@ test('notifications: recipients, own actions, per-member read state, duplicates,
   assert.equal((await act(B, id, 'assign', 'Admin', { dev: 'Miguel Santos', priority: 'High' })).status, 200);
   assert.equal(await db.collection('beta_notifications').countDocuments({ inbox: 'admin' }), adminCount, 'acting view inbox not notified');
   const reqA = (await notes(A, 'Requestor')).json;
-  assert.ok(reqA.items.some(n => n.record === id && n.title === 'Developer assigned' && !n.read));
+  assert.ok(reqA.items.some(n => n.record === id && n.title === 'Worker assigned' && !n.read));
   assert.ok(!(await notes(B, 'Requestor')).json.items.some(n => n.record === id), 'another member cannot see this member\'s own request inbox');
   assert.ok((await notes(B, 'Developer')).json.items.some(n => n.record === id && n.title === 'Assigned to you'));
   // Information request, meeting proposal, acceptance request, returned correction.
@@ -250,14 +250,25 @@ test('notifications: recipients, own actions, per-member read state, duplicates,
   assert.ok((await notes(A, 'Requestor')).json.items.some(n => n.title === 'Meeting proposed: please confirm'));
   assert.equal((await act(A, id, 'confirm-meeting', 'Requestor')).status, 200);
   assert.ok((await notes(B, 'Developer')).json.items.some(n => n.record === id && n.title === 'Meeting confirmed'));
-  const project = await act(B, id, 'create-project', 'Developer', { projectName: 'FEATURETEST project', requirements: 'R', criteria: 'C', date: '2026-12-15', tasks: [{ title: 'Build', requirement: 'R', criteria: 'C', start: '2026-11-21', end: '2026-11-25', owner: 'Miguel Santos' }] });
+  assert.equal((await act(B, id, 'record-agreement', 'Developer', { notes: 'N', requirements: 'R', criteria: 'C' })).status, 200);
+  assert.ok((await notes(A, 'Requestor')).json.items.some(n => n.record === id && n.title === 'Requirements agreement: please confirm'));
+  assert.equal((await act(A, id, 'confirm-agreement', 'Requestor')).status, 200);
+  assert.ok((await notes(B, 'Developer')).json.items.some(n => n.record === id && n.title === 'Agreement confirmed by one side: yours is needed'));
+  assert.equal((await act(B, id, 'confirm-agreement', 'Developer')).status, 200);
+  assert.ok((await notes(B, 'Admin')).json.items.some(n => n.record === id && n.title === 'Agreement confirmed by both sides and locked'));
+  const project = await act(B, id, 'create-project', 'Developer', { projectName: 'FEATURETEST project', date: '2026-12-15', tasks: [{ title: 'Build', requirement: 'R', criteria: 'C', start: '2026-11-21', end: '2026-11-25', owner: 'Miguel Santos' }] });
   assert.equal(project.status, 200, JSON.stringify(project.json));
-  assert.equal((await notes(A, 'Requestor')).json.items.find(n => n.title === 'Project created').target, 'project', 'links to the project');
+  assert.equal((await notes(A, 'Requestor')).json.items.find(n => n.title === 'Project timeline created').target, 'project', 'links to the project');
   assert.equal((await act(B, id, 'toggle-task', 'Developer', { index: 0, done: true })).status, 200);
-  assert.equal((await act(B, id, 'submit-acceptance', 'Developer', { summary: 'Tested.' })).status, 200);
-  assert.ok((await notes(A, 'Requestor')).json.items.some(n => n.record === id && n.title === 'Acceptance requested'));
+  assert.equal((await act(B, id, 'status', 'Developer', { status: 'In progress' })).status, 400, 'every task is done');
+  assert.equal((await act(B, id, 'toggle-task', 'Developer', { index: 0, done: false })).status, 200);
+  assert.equal((await act(B, id, 'status', 'Developer', { status: 'In progress' })).status, 200);
+  assert.equal((await act(B, id, 'toggle-task', 'Developer', { index: 0, done: true })).status, 200);
+  assert.equal((await act(B, id, 'add-evidence', 'Developer', { links: [{ url: 'https://example.com/proof' }] })).status, 200);
+  assert.equal((await act(B, id, 'worker-complete', 'Developer', { summary: 'Tested.' })).status, 200);
+  assert.ok((await notes(A, 'Requestor')).json.items.some(n => n.record === id && n.title === 'Work marked done: please review the evidence and confirm'));
   assert.equal((await act(A, id, 'reason', 'Requestor', { status: 'In progress', reason: 'Totals still wrong' })).status, 200);
-  assert.ok((await notes(B, 'Developer')).json.items.some(n => n.record === id && n.title === 'Returned for correction'));
+  assert.ok((await notes(B, 'Developer')).json.items.some(n => n.record === id && n.title === 'Returned for correction: confirmations cleared'));
   // Comments reach the other parties, never the commenter's view.
   assert.equal((await act(A, id, 'comment', 'Requestor', { comment: 'FEATURETEST ping' })).status, 200);
   const pings = await db.collection('beta_notifications').find({ text: /FEATURETEST ping/ }).toArray();
@@ -323,35 +334,38 @@ test('search: combined filters, pagination, visibility, and validation over all 
   // Requestor view: own requests plus the shared samples; never another member's requests.
   const asB = await search(B, { view: 'Requestor', q: 'FINDME' });
   assert.deepEqual(asB.json.items.map(t => t.id), [ids.b1]);
-  // Admin and Developer views are both staff and list every shared record.
+  // The Admin view lists every shared record; the Developer view only the sample developer's assigned work.
   const devView = (await search(B, { view: 'Developer', pageSize: 50 })).json, adminView = (await search(B, { view: 'Admin', pageSize: 50 })).json;
-  assert.equal(devView.total, adminView.total);
+  assert.ok(devView.total > 0 && devView.total < adminView.total && devView.items.every(t => t.dev === 'Miguel Santos'));
+  assert.deepEqual((await search(B, { view: 'Developer', q: 'FINDME' })).json.items, [], 'unassigned requests are not in the Developer view');
   // Projects scope searches project IDs and names.
   const projects = (await search(B, { view: 'Admin', scope: 'projects', q: 'PRJ-' })).json;
   assert.ok(projects.total >= 1 && projects.items.every(t => t.project));
   // Server search agrees with the shared browser filter on the same records.
   const all = (await ws(B)).tickets;
-  for (const f of [{ q: 'invoice' }, { status: 'In progress' }, { department: 'Finance', dev: 'Unassigned' }, { priority: 'High' }]) {
+  for (const f of [{ q: 'invoice' }, { status: 'In progress' }, { department: 'Finance', dev: 'Unassigned' }, { priority: 'High' }, { type: 'Project' }, { type: 'Ticket' }, { stage: 'new' }, { stage: 'active' }, { stage: 'awaiting-worker' }, { stage: 'awaiting-requestor' }, { stage: 'ready' }, { stage: 'closed' }, { type: 'Project', stage: 'awaiting-worker' }]) {
     const local = ListFilter.page(all, ListFilter.normalize({ ...f, pageSize: 50 }));
     const remote = await s({ ...f, pageSize: 50 });
     assert.deepEqual(remote.items.map(t => t.id), local.items.map(t => t.id), JSON.stringify(f));
   }
-  for (const bad of [{ status: 'Nope' }, { dev: 'Real Person' }, { pageSize: 500 }, { page: 0 }, { q: 'x'.repeat(101) }, { scope: 'changes' }]) {
+  for (const bad of [{ status: 'Nope' }, { dev: 'Real Person' }, { pageSize: 500 }, { page: 0 }, { q: 'x'.repeat(101) }, { scope: 'changes' }, { type: 'Epic' }, { stage: 'ended' }]) {
     const r = await search(B, { view: 'Admin', ...bad });
     assert.equal(r.status, 400, JSON.stringify(bad)); assert.ok(r.json.message || r.json.error);
   }
   assert.equal((await search(B, { view: 'Owner' })).status, 400);
   assert.equal((await search(null, { view: 'Admin' })).status, 401);
-  const one = await call(`/api/v1/beta/tickets/${ids.a1}`, { cookie: B });
+  const one = await call(`/api/v1/beta/tickets/${ids.a1}?view=Admin`, { cookie: B });
   assert.equal(one.status, 200); assert.equal(one.json.tickets[0].id, ids.a1);
-  assert.equal((await call('/api/v1/beta/tickets/JRC-999999', { cookie: B })).status, 404);
+  assert.equal((await call(`/api/v1/beta/tickets/${ids.a1}`, { cookie: B })).status, 400, 'a simulated view is required');
+  assert.equal((await call(`/api/v1/beta/tickets/${ids.a1}?view=Requestor`, { cookie: B })).status, 404, 'another member\'s request');
+  assert.equal((await call('/api/v1/beta/tickets/JRC-999999?view=Admin', { cookie: B })).status, 404);
 });
 
 test('reset clears only beta records, beta files, and beta notifications', async () => {
   const usersBefore = await db.collection('users').countDocuments();
   const unrelated = mongo.db('some_other_app');
   await unrelated.collection('fs.files').insertOne({ keep: true });
-  const res = await post('/api/v1/beta/reset', A, { confirm: 'RESET' });
+  const res = await post('/api/v1/beta/reset', A, { confirm: 'RESET', view: 'Requestor' });
   assert.equal(res.status, 200);
   assert.equal(await db.collection('beta_attachments').countDocuments(), 0);
   assert.equal(await db.collection('beta_files.files').countDocuments(), 0);

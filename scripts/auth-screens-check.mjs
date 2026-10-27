@@ -78,7 +78,7 @@ try {
   db = mongo.db('jarctech_auth_screens');
   await ensureSchema(db);
   const store = createStore(db);
-  await store.inviteUser({ email: 'owner@jarc.example', role: 'Developer', displayName: 'Olivia Owner' }, null);
+  await store.inviteUser({ email: 'owner@jarc.example', role: 'Admin', displayName: 'Olivia Owner' }, null);
   await store.inviteUser({ email: 'rita@jarc.example', role: 'Requestor', displayName: 'Rita Requestor' }, null);
   entra = await startMockEntra({ tenantId: TENANT, clientId: CLIENT, clientSecret: 'screens-check-client-secret' });
   const port = await freePort(), debug = await freePort();
@@ -92,7 +92,7 @@ try {
   const betaDb = mongo.db('jarctech_auth_screens_beta');
   await ensureSchema(betaDb);
   const betaStore = createStore(betaDb);
-  await betaDb.collection('users').insertOne({ email: 'boss@jarc.example', role: 'Developer', status: 'active', displayName: 'Bea Boss', tenantId: TENANT, entraObjectId: account(31).oid, createdAt: new Date(), updatedAt: new Date() });
+  await betaDb.collection('users').insertOne({ email: 'boss@jarc.example', role: 'Admin', status: 'active', displayName: 'Bea Boss', tenantId: TENANT, entraObjectId: account(31).oid, createdAt: new Date(), updatedAt: new Date() });
   const betaAdmin = await betaDb.collection('users').findOne({ email: 'boss@jarc.example' });
   await betaStore.inviteUser({ email: 'devon@jarc.example', role: 'Developer', displayName: 'Devon Developer' }, betaAdmin);
   await betaDb.collection('users').insertOne({ email: 'dora@jarc.example', role: 'Requestor', status: 'disabled', displayName: 'Dora Disabled', tenantId: TENANT, entraObjectId: account(34).oid, createdAt: new Date(), updatedAt: new Date() });
@@ -172,15 +172,15 @@ try {
 
     entra.signInNext(account(1, 'Olivia Owner', 'owner@jarc.example'));
     await clickAndLoad('a.primary');
-    check('invited Developer lands in the app with the Users button', await here() === '/' && await js(`!!document.querySelector('#manage-users') && document.querySelector('.signed-in-as').textContent==='Olivia Owner · Developer'`));
+    check('invited Admin lands in the app with the Users button', await here() === '/' && await js(`!!document.querySelector('#manage-users') && document.querySelector('.signed-in-as').textContent==='Olivia Owner · Admin'`));
     await js(`document.querySelector('#manage-users').click(); true`); await sleep(600);
     check('Users screen lists people with their access', await js(`document.querySelector('.users-table').textContent.includes('rita@jarc.example') && document.querySelector('.users-table').textContent.includes('You')`));
     await js(`{const f=document.querySelector('#invite-form');f.querySelector('[name=email]').value='dev@jarc.example';f.querySelector('[name=displayName]').value='Dana Developer';f.querySelector('[name=role]').value='Developer';f.requestSubmit()} true`); await sleep(800);
     const dana = await db.collection('users').findOne({ email: 'dev@jarc.example' });
-    check('a Developer can invite someone; they are listed as invited', dana?.status === 'invited' && await js(`[...document.querySelectorAll('.users-table tr')].some(r=>r.textContent.includes('dev@jarc.example') && r.querySelector('select[data-field=status]').selectedOptions[0].textContent==='Invited (not signed in yet)')`));
+    check('an Admin can invite someone; they are listed as invited', dana?.status === 'invited' && await js(`[...document.querySelectorAll('.users-table tr')].some(r=>r.textContent.includes('dev@jarc.example') && r.querySelector('select[data-field=status]').selectedOptions[0].textContent==='Invited (not signed in yet)')`));
     await shot('06-users-screen.png');
     await js(`{const s=document.querySelector('select[data-user="${dana._id}"][data-field="status"]');s.value='disabled';s.dispatchEvent(new Event('change'))} true`); await sleep(800);
-    check('a Developer can revoke a pending invitation', (await db.collection('users').findOne({ email: 'dev@jarc.example' })).status === 'disabled');
+    check('an Admin can revoke a pending invitation', (await db.collection('users').findOne({ email: 'dev@jarc.example' })).status === 'disabled');
     const ritaId = String((await db.collection('users').findOne({ email: 'rita@jarc.example' }))._id);
     await js(`{const s=document.querySelector('select[data-user="${ritaId}"][data-field="role"]');s.value='Developer';s.dispatchEvent(new Event('change'))} true`); await sleep(800);
     check('Admin role change is saved on the server', (await db.collection('users').findOne({ email: 'rita@jarc.example' })).role === 'Developer');
@@ -219,12 +219,12 @@ try {
     check('beta: no accounts were created for refused sign-ins', await betaUsers.countDocuments({ email: { $in: ['gail@partner.example', 'pat@outlook.example', 'otto@other.example'] } }) === 0 && await betaUsers.countDocuments({ email: 'dora@jarc.example' }) === 1);
 
     await signInAs(account(38, 'Devon Developer', 'devon@jarc.example'));
-    check('beta: a Developer-invited Developer keeps the Developer role', await js(`document.querySelector('.signed-in-as').textContent==='Devon Developer · Developer'`) && (await betaUsers.findOne({ email: 'devon@jarc.example' })).role === 'Developer');
+    check('beta: an Admin-invited Developer keeps the Developer role', await js(`document.querySelector('.signed-in-as').textContent==='Devon Developer · Developer'`) && (await betaUsers.findOne({ email: 'devon@jarc.example' })).role === 'Developer');
     await signOutBeta();
 
     await signInAs(account(31, 'Bea Boss', 'boss@jarc.example'));
     await js(`document.querySelector('#manage-users').click(); true`); await sleep(600);
-    check('beta: the Developer Users screen explains the beta access policy and lists auto-admitted members', await js(`document.querySelector('.drawer').textContent.includes('Beta access: every member account of the company tenant can sign in and starts as a Requestor') && document.querySelector('.users-table').textContent.includes('mia@jarc.example')`));
+    check('beta: the Admin Users screen explains the beta access policy and lists auto-admitted members', await js(`document.querySelector('.drawer').textContent.includes('Beta access: every member account of the company tenant can sign in and starts as a Requestor') && document.querySelector('.users-table').textContent.includes('mia@jarc.example')`));
     await shot('14-beta-users-screen.png');
 
     check('no page errors', errors.length === 0, errors.join(' | '));

@@ -45,10 +45,10 @@ const BROWSER = process.env.BROWSER_PATH || (CANDIDATES[process.platform] || [])
 const FLOWS = {
   1: 'Requestor submission and progress tracking',
   2: 'Admin review, clarification, rejection, priority, and assignment',
-  3: 'Developer requirements meetings and confirmation',
-  4: 'Two-step project creation and date validation',
+  3: 'Developer requirements meeting and the locked agreement',
+  4: 'Two-step project timeline and date validation',
   5: 'Gantt editing, progress, and reload persistence',
-  6: 'Testing, acceptance, corrections, release, and closure',
+  6: 'Evidence, dual confirmation, corrections, release, and closure',
   7: 'Linked change assessment, agreement, approval, and delivery',
   8: 'Search, filters, notifications, and dialog controls',
   9: 'Sign-in, logout, recovery, and inspection-data isolation'
@@ -110,7 +110,7 @@ try {
   mongo = new MongoClient(mongod.getUri());
   const db = mongo.db('jarctech_inspection_walkthrough');
   await ensureSchema(db);
-  await db.collection('users').insertOne({ email: 'ada@jarc.example', role: 'Developer', status: 'active', displayName: 'Ada Admin', tenantId: TENANT, entraObjectId: account(2).oid, createdAt: new Date(), updatedAt: new Date() });
+  await db.collection('users').insertOne({ email: 'ada@jarc.example', role: 'Admin', status: 'active', displayName: 'Ada Admin', tenantId: TENANT, entraObjectId: account(2).oid, createdAt: new Date(), updatedAt: new Date() });
   entra = await startMockEntra({ tenantId: TENANT, clientId: CLIENT, clientSecret: 'inspection-walkthrough-secret' });
   const port = await freePort(), debug = await freePort();
   const origin = `http://localhost:${port}`;
@@ -157,8 +157,8 @@ try {
     // ---------- 1: Requestor submission and progress ----------
     flow = 1;
     await w(`__w.click('#new-ticket'); true`); await sleep(200);
-    check('request form keeps all current fields, with the sample requestor identity (editable in inspection)', await w(`['title','name','department','date','category','description','criteria'].every(n=>!!document.querySelector('#request-form [name='+n+']')) && document.querySelector('[name=name]').value==='Adriane Venzon' && !document.querySelector('[name=name]').readOnly`));
-    await w(`__w.set('[name=title]','Inspection request');__w.set('[name=date]','2026-12-15');__w.set('[name=description]','Need a sample feature.');__w.set('[name=criteria]','Sample checks pass.');__w.submit('#request-form');true`);
+    check('request form keeps all current fields, with the sample requestor identity (editable in inspection)', await w(`['title','name','type','department','date','category','description','criteria'].every(n=>!!document.querySelector('#request-form [name='+n+']')) && document.querySelector('[name=name]').value==='Adriane Venzon' && !document.querySelector('[name=name]').readOnly`));
+    await w(`__w.set('[name=title]','Inspection request');__w.set('[name=type]','Project');__w.set('[name=date]','2026-12-15');__w.set('[name=description]','Need a sample feature.');__w.set('[name=criteria]','Sample checks pass.');__w.submit('#request-form');true`);
     check('submission creates JRC-1043 as Submitted with a confirmation', await w(`__w.toast().includes('JRC-1043') && __w.ticket('JRC-1043').status==='Submitted' && __w.ticket('JRC-1043').priority==='Medium'`), await w(`__w.toast()`));
     check('the Requestor list shows only the requestor\’s own tickets, including the new one', await w(`!!document.querySelector('[data-id="JRC-1043"]') && document.querySelectorAll('#records [data-id]').length===__w.data().tickets.filter(t=>t.name==='Adriane Venzon').length`));
     check('progress is tracked from tasks (JRC-1042 shows 50%)', await w(`document.querySelector('tr[data-id="JRC-1042"]').textContent.includes('50%')`));
@@ -179,7 +179,7 @@ try {
     check('Requestor answers in a comment and returns it to admin review', await w(`__w.ticket('JRC-1043').status==='Under review' && __w.ticket('JRC-1043').history.some(h=>h.text.includes('Columns: date'))`));
     await w(`__w.view('Admin');__w.open('JRC-1043');__w.set('#assignee','Miguel Santos');__w.set('#priority','High');__w.click('#assign');true`);
     check('Admin sets priority High and assigns the developer', await w(`(()=>{const t=__w.ticket('JRC-1043');return t.status==='Assigned'&&t.dev==='Miguel Santos'&&t.priority==='High'})()`));
-    await w(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));__w.view('Requestor');__w.click('#new-ticket');__w.set('[name=title]','Duplicate request');__w.set('[name=date]','2026-12-20');__w.set('[name=description]','Same as JRC-1043.');__w.submit('#request-form');true`);
+    await w(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));__w.view('Requestor');__w.click('#new-ticket');__w.set('[name=title]','Duplicate request');__w.set('[name=type]','Ticket');__w.set('[name=date]','2026-12-20');__w.set('[name=description]','Same as JRC-1043.');__w.submit('#request-form');true`);
     await w(`__w.view('Admin');__w.open('JRC-1044');__w.click('[data-reason="Rejected"]');__w.set('#reason-form [name=reason]','Duplicate of JRC-1043.');__w.submit('#reason-form');true`);
     check('Admin rejects a duplicate with a reason', await w(`__w.ticket('JRC-1044').status==='Rejected' && __w.ticket('JRC-1044').history.some(h=>h.text.includes('Duplicate of JRC-1043'))`));
     await w(`__w.set('#assignee','Miguel Santos');__w.click('#assign');true`);
@@ -190,18 +190,23 @@ try {
     // ---------- 3: Developer meetings and confirmation ----------
     flow = 3;
     await w(`__w.view('Developer'); true`); await sleep(200);
-    check('Developer view lists every ticket (staff), like Admin', await w(`document.querySelectorAll('#records [data-id]').length===__w.data().tickets.length && !!document.querySelector('[data-id="JRC-1043"]')`));
+    check('Developer view lists only the work assigned to sample developer Miguel Santos', await w(`document.querySelectorAll('#records [data-id]').length===__w.data().tickets.filter(t=>t.dev==='Miguel Santos').length && !!document.querySelector('[data-id="JRC-1043"]') && !document.querySelector('[data-id="JRC-1041"]')`));
     await w(`__w.open('JRC-1043');__w.click('#schedule');__w.set('#meeting-form [name=meeting]','2026-11-03T10:00');__w.set('#meeting-form [name=location]','JARC meeting room');__w.submit('#meeting-form');true`);
     check('Developer schedules the requirements meeting inside ticket details', await w(`__w.ticket('JRC-1043').status==='Meeting scheduled' && __w.ticket('JRC-1043').meetingConfirmed===false`));
     await w(`__w.view('Requestor');__w.open('JRC-1043');__w.click('#confirm-meeting');true`);
     check('Requestor confirms the meeting', await w(`__w.ticket('JRC-1043').meetingConfirmed===true && __w.text().includes('Confirmed')`));
+    await w(`__w.view('Developer');__w.open('JRC-1043');__w.click('#record-agreement');__w.set('#agreement-form [name=notes]','Met.');__w.set('#agreement-form [name=requirements]','Build the report.');__w.set('#agreement-form [name=criteria]','Totals match.');__w.submit('#agreement-form');true`);
+    await w(`__w.click('#confirm-agreement');true`);
+    check('Developer records and confirms the agreement; it waits for the Requestor', await w(`!__w.ticket('JRC-1043').agreements && __w.ticket('JRC-1043').agreementDraft.worker.name==='Miguel Santos'`));
+    await w(`__w.view('Requestor');__w.open('JRC-1043');__w.click('#confirm-agreement');true`);
+    check('the Requestor confirms and the agreement locks', await w(`__w.ticket('JRC-1043').agreements.length===1 && __w.text().includes('Locked')`));
     await w(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); true`);
 
     // ---------- 4: Two-step project creation and date validation ----------
     flow = 4;
     await w(`__w.view('Developer');__w.open('JRC-1043');__w.click('#create-project');true`);
-    check('step 1 of 2: named scope, requirements, criteria, and target date', await w(`document.querySelector('.tagline').textContent.includes('STEP 1 OF 2')`));
-    await w(`__w.set('#project-scope [name=projectName]','Inspection project');__w.set('#project-scope [name=requirements]','Build the report.');__w.set('#project-scope [name=criteria]','Totals match.');__w.set('#project-scope [name=date]','2026-12-15');__w.submit('#project-scope');true`);
+    check('step 1 of 2: project name and delivery target, with the locked agreement read-only', await w(`document.querySelector('.tagline').textContent.includes('STEP 1 OF 2') && __w.text().includes('Build the report.') && !document.querySelector('#project-scope [name=requirements]')`));
+    await w(`__w.set('#project-scope [name=projectName]','Inspection project');__w.set('#project-scope [name=date]','2026-12-15');__w.submit('#project-scope');true`);
     check('step 2 of 2: dated tasks and timeline', await w(`document.querySelector('.tagline').textContent.includes('STEP 2 OF 2')`));
     const fillTask = (i, t, s, e) => `{let f=document.querySelectorAll('.plan-task')[${i}];__w.set('[name=title]','${t}',f);__w.set('[name=requirement]','Req ${t}',f);__w.set('[name=criteria]','Crit ${t}',f);__w.set('[name=start]','${s}',f);__w.set('[name=end]','${e}',f);}`;
     await w(`${fillTask(0, 'Build', '2026-11-10', '2026-11-05')};__w.set('[name=agreed]',true);__w.submit('#project-tasks');true`);
@@ -226,21 +231,28 @@ try {
 
     // ---------- 6: Testing, acceptance, corrections, release, closure ----------
     flow = 6;
-    await w(`__w.view('Developer');__w.open('JRC-1043');__w.click('#testing');true`);
-    check('acceptance cannot be requested while tasks are open', await w(`__w.ticket('JRC-1043').status==='Planning' && __w.toast().includes('Complete all')`), await w(`__w.toast()`));
+    await w(`__w.view('Developer');__w.open('JRC-1043');__w.click('[data-action="In progress"]');true`);
+    check('Developer starts development after the agreement and timeline', await w(`__w.ticket('JRC-1043').status==='In progress'`));
+    await w(`__w.click('#worker-complete');true`);
+    check('work cannot be marked done while tasks are open', await w(`__w.ticket('JRC-1043').status==='In progress' && __w.toast().includes('Complete all')`), await w(`__w.toast()`));
     await w(`__w.click('[data-task="1"]');true`);
-    await w(`__w.click('#testing');__w.set('#test-form [name=summary]','Tested against criteria.');__w.set('#test-form input[type=checkbox]',true);__w.submit('#test-form');true`);
-    check('Developer submits testing results for acceptance', await w(`__w.ticket('JRC-1043').status==='Awaiting acceptance'`));
-    await w(`__w.view('Requestor');__w.open('JRC-1043');__w.click('[data-reason="In progress"]');__w.set('#reason-form [name=reason]','Region totals are wrong.');__w.submit('#reason-form');true`);
-    check('Requestor returns a correction; it stays on the original ticket and reopens the last task', await w(`(()=>{const t=__w.ticket('JRC-1043');return t.status==='In progress'&&t.tasks[t.tasks.length-1].done===false&&t.history.some(h=>h.text.includes('Region totals'))})()`));
+    await w(`__w.click('#worker-complete');true`);
+    check('nor without evidence', await w(`__w.toast().includes('evidence')`), await w(`__w.toast()`));
+    await w(`__w.set('#evidence-form [name=label0]','Test report');__w.set('#evidence-form [name=url0]','https://example.com/report');__w.submit('#evidence-form');true`);
+    await w(`__w.click('#worker-complete');__w.set('#complete-form [name=summary]','Tested against criteria.');__w.set('#complete-form input[type=checkbox]',true);__w.submit('#complete-form');true`);
+    check('Developer adds evidence and marks the work done', await w(`__w.ticket('JRC-1043').status==='Awaiting acceptance' && __w.ticket('JRC-1043').completion.worker.name==='Miguel Santos'`));
+    await w(`__w.view('Requestor');__w.open('JRC-1043');__w.click('#workflow-panels [data-reason="In progress"]');__w.set('#reason-form [name=reason]','Region totals are wrong.');__w.submit('#reason-form');true`);
+    check('Requestor returns a correction: it stays on the original ticket, reopens the last task, and clears the worker confirmation', await w(`(()=>{const t=__w.ticket('JRC-1043');return t.status==='In progress'&&t.tasks[t.tasks.length-1].done===false&&!t.completion.worker&&t.corrections.length===1&&t.history.some(h=>h.text.includes('Region totals'))})()`));
     await w(`__w.view('Developer');__w.open('JRC-1043');__w.click('[data-task="1"]');true`);
-    await w(`__w.click('#testing');__w.set('#test-form [name=summary]','Fixed and retested.');__w.set('#test-form input[type=checkbox]',true);__w.submit('#test-form');true`);
-    await w(`__w.view('Requestor');__w.open('JRC-1043');__w.click('[data-action="Ready for release"]');true`);
-    check('Requestor accepts the corrected delivery', await w(`__w.ticket('JRC-1043').status==='Ready for release'`));
+    await w(`__w.click('#worker-complete');__w.set('#complete-form [name=summary]','Fixed and retested.');__w.set('#complete-form input[type=checkbox]',true);__w.submit('#complete-form');true`);
+    await w(`__w.view('Admin');__w.open('JRC-1043');true`);
+    check('the Admin cannot close before the Requestor confirms', await w(`!document.querySelector('[data-action="Closed"]')`));
+    await w(`__w.view('Requestor');__w.open('JRC-1043');__w.click('#requestor-confirm');true`);
+    check('Requestor confirms the corrected delivery independently', await w(`__w.ticket('JRC-1043').status==='Ready for release' && __w.ticket('JRC-1043').completion.requestor.view==='Requestor'`));
     await w(`__w.view('Developer');__w.open('JRC-1043');__w.click('[data-action="Released"]');true`);
     check('Developer confirms release', await w(`__w.ticket('JRC-1043').status==='Released'`));
     await w(`__w.view('Admin');__w.open('JRC-1043');__w.click('[data-action="Closed"]');true`);
-    check('Admin closes the ticket (acceptance → release → closure order kept)', await w(`__w.ticket('JRC-1043').status==='Closed'`));
+    check('Admin closes it after both confirmations and the release', await w(`__w.ticket('JRC-1043').status==='Closed'`));
     await w(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); true`);
 
     // ---------- 7: Linked change lifecycle ----------
@@ -250,7 +262,7 @@ try {
     check('a scope change is requested from inside the original ticket', !!crId && await w(`__w.change('${crId}').status==='Submitted' && __w.change('${crId}').ticket==='JRC-1042'`), crId);
     const openChange = r => `document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));__w.view('${r}');__w.open('JRC-1042');__w.click('[data-linked-change="${crId}"]');`;
     await w(`${openChange('Admin')}__w.click('[data-cstatus="Assessment"]');true`);
-    check('Admin sends it for developer assessment', await w(`__w.change('${crId}').status==='Assessment'`));
+    check('Admin sends it for the worker assessment', await w(`__w.change('${crId}').status==='Assessment'`));
     await w(`${openChange('Developer')}__w.set('#impact-form [name=impact]','Adds a filter to the report.');__w.set('#impact-form [name=effort]','2 working days');__w.set('#impact-form [name=date]','2026-11-15');__w.submit('#impact-form');true`);
     check('Developer records the impact assessment', await w(`__w.change('${crId}').status==='Awaiting approval' && __w.change('${crId}').effort==='2 working days'`));
     await w(`${openChange('Requestor')}__w.click('#agree-change');true`);
@@ -264,7 +276,7 @@ try {
     await w(`${openChange('Developer')}__w.click('[data-cstatus="Released"]');true`);
     check('Requestor accepts and Developer releases; the change task is completed', await w(`__w.change('${crId}').status==='Released' && __w.ticket('JRC-1042').tasks.find(t=>t.title.startsWith('${crId}:')).done===true`));
     await w(`${openChange('Admin')}__w.click('[data-cstatus="Closed"]');true`);
-    check('Admin closes the change; approver and history are recorded', await w(`__w.change('${crId}').status==='Closed' && __w.change('${crId}').approvedBy==='Admin' && __w.change('${crId}').history.length>=7`));
+    check('Admin closes the change; approver and history are recorded', await w(`__w.change('${crId}').status==='Closed' && __w.change('${crId}').approvedBy==='Alex Admin' && __w.change('${crId}').history.length>=7`));
     await w(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));__w.view('Admin');__w.open('JRC-1042');__w.click('[data-linked-change="CR-201"]');__w.click('[data-cstatus="Assessment"]');true`);
     await w(`__w.click('[data-decision="Rejected"]');__w.set('#decision-form [name=reason]','Out of scope for this quarter.');__w.submit('#decision-form');true`);
     check('Admin can reject a change with a recorded reason', await w(`__w.change('CR-201').status==='Rejected' && __w.change('CR-201').history.some(h=>h.text.includes('Out of scope'))`));
@@ -304,7 +316,7 @@ try {
     check('logout ends the session (signed-out page; the app is closed again)', await w(`location.pathname==='/auth/signed-out'`) && (await (async () => { await nav(`${origin}/`); return w(`location.pathname==='/auth/signin'`); })()));
     entra.signInNext(account(2, 'Ada Admin', 'ada@jarc.example'));
     await loads(() => w(`__w.click('a.primary'); true`));
-    check('a real Developer has Users outside inspection, but not while inspecting', await w(`!!document.querySelector('#manage-users')`) && await (async () => { await w(`localStorage.setItem('jarc-inspection-view','Developer'); true`); await reload(); return w(`!!document.querySelector('#inspection-banner') && !document.querySelector('#manage-users') && document.querySelector('.signed-in-as').textContent==='Ada Admin · Developer'`); })());
+    check('a real Admin has Users outside inspection, but not while inspecting', await w(`!!document.querySelector('#manage-users')`) && await (async () => { await w(`localStorage.setItem('jarc-inspection-view','Developer'); true`); await reload(); return w(`!!document.querySelector('#inspection-banner') && !document.querySelector('#manage-users') && document.querySelector('.signed-in-as').textContent==='Ada Admin · Admin'`); })());
     check('no page errors', errors.length === 0, errors.join(' | '));
   } catch (err) {
     if (!interrupted) check('walkthrough crashed', false, err.stack);

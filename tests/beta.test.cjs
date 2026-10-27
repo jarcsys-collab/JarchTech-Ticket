@@ -58,7 +58,7 @@ async function signIn(n) {
   assert.ok(session, 'signed in');
   return session.split(';')[0];
 }
-const ws = async cookie => (await call('/api/v1/beta/workspace', { cookie })).json;
+const ws = async (cookie, view = 'Admin') => (await call(`/api/v1/beta/workspace?view=${view}`, { cookie })).json;
 const find = (w, id) => w.tickets.find(t => t.id === id) || w.changes.find(c => c.id === id);
 let A, B, rid = 0;
 const requestId = () => `test-request-${++rid}-${Date.now()}`;
@@ -66,7 +66,7 @@ async function act(cookie, kind, id, action, view, input = {}) {
   const current = find(await ws(cookie), id);
   return post(`/api/v1/beta/${kind}/${id}/actions`, cookie, { view, version: current.version, action, input });
 }
-const newRequest = (overrides = {}) => ({ title: 'Shared beta request', name: 'Spoofed Name', department: 'Sales', date: '2026-12-15', category: 'New feature', description: 'Need a shared report.', criteria: 'Report totals match.', ...overrides });
+const newRequest = (overrides = {}) => ({ title: 'Shared beta request', type: 'Project', name: 'Spoofed Name', department: 'Sales', date: '2026-12-15', category: 'New feature', description: 'Need a shared report.', criteria: 'Report totals match.', ...overrides });
 
 test('no seeding on startup: the workspace starts empty; the explicit seed adds the samples', async () => {
   A = await signIn(1); B = await signIn(2);
@@ -104,6 +104,8 @@ test('submission: validated, requester taken from the session, repeated submissi
   assert.equal((await post('/api/v1/beta/tickets', A, { view: 'Requestor', requestId: requestId(), input: newRequest({ title: '' }) })).status, 400);
   assert.equal((await post('/api/v1/beta/tickets', A, { view: 'Requestor', requestId: requestId(), input: newRequest({ date: '2026-02-30' }) })).status, 400);
   assert.equal((await post('/api/v1/beta/tickets', A, { view: 'Requestor', requestId: requestId(), input: newRequest({ description: 'x'.repeat(5001) }) })).status, 400);
+  assert.equal((await post('/api/v1/beta/tickets', A, { view: 'Requestor', requestId: requestId(), input: newRequest({ type: '' }) })).json.message, 'Choose a request type: Ticket or Project.', 'the request type is required');
+  assert.equal((await post('/api/v1/beta/tickets', A, { view: 'Requestor', requestId: requestId(), input: newRequest({ type: 'Epic' }) })).status, 400);
   const id = requestId();
   const first = await post('/api/v1/beta/tickets', A, { view: 'Requestor', requestId: id, input: newRequest() });
   assert.equal(first.status, 201); assert.equal(first.json.created, 'JRC-1043');
@@ -111,64 +113,132 @@ test('submission: validated, requester taken from the session, repeated submissi
   assert.equal(t.name, 'Member 1', 'requester name comes from the session, not the form');
   assert.deepEqual(t.requester, { id: t.requester.id, name: 'Member 1', sample: false });
   assert.equal(t.history[0].actor, 'Member 1'); assert.equal(t.history[0].view, 'Requestor'); assert.equal(t.status, 'Submitted');
+  assert.equal(t.type, 'Project'); assert.equal(t.category, 'New feature', 'request type and category are separate');
+  assert.deepEqual(t.completion, { round: 1, worker: null, requestor: null, log: [] });
   const again = await post('/api/v1/beta/tickets', A, { view: 'Requestor', requestId: id, input: newRequest() });
   assert.equal(again.status, 200); assert.equal(again.json.duplicate, true); assert.equal(again.json.created, 'JRC-1043');
   assert.equal(await db.collection('beta_tickets').countDocuments({ title: 'Shared beta request' }), 1);
-  assert.ok((await ws(B)).tickets.some(x => x.id === 'JRC-1043'), 'visible to another member');
+  assert.ok((await ws(B)).tickets.some(x => x.id === 'JRC-1043'), 'visible to another member in the Admin view');
+  assert.ok(!(await ws(B, 'Requestor')).tickets.some(x => x.id === 'JRC-1043'), 'but not as another member\'s Requestor view');
 });
 
 test('views are checked on the server and never grant access outside the beta workspace', async () => {
   assert.equal((await act(A, 'tickets', 'JRC-1043', 'assign', 'Requestor', { dev: 'Miguel Santos', priority: 'High' })).status, 403);
   assert.equal((await act(A, 'tickets', 'JRC-1043', 'status', 'Admin', { status: 'Closed' })).status, 409, 'invalid transition');
-  assert.equal((await act(A, 'tickets', 'JRC-1043', 'assign', 'Admin', { dev: 'Someone Real', priority: 'High' })).status, 400, 'sample developers only');
-  // Admin and Developer views are both staff: delivery work is allowed in either (the input is still validated).
-  assert.equal((await act(A, 'tickets', 'JRC-1041', 'create-project', 'Admin', {})).status, 400, 'staff view may deliver; empty scope refused');
+  assert.equal((await act(A, 'tickets', 'JRC-1043', 'assign', 'Admin', { dev: 'Someone Real', priority: 'High' })).status, 400, 'sample developers or the Admin test identity only');
+  // The Developer view is the sample developer Miguel Santos: only work assigned to him, and no assignment.
+  assert.equal((await call('/api/v1/beta/tickets/JRC-1041?view=Developer', { cookie: A })).status, 404, 'JRC-1041 is assigned to Elyza Cruz');
+  assert.equal((await call('/api/v1/beta/tickets/JRC-1042?view=Developer', { cookie: A })).status, 200, 'JRC-1042 is assigned to Miguel Santos');
+  assert.ok((await ws(A, 'Developer')).tickets.every(t => t.dev === 'Miguel Santos'), 'Developer lists show assigned work only');
+  assert.equal((await post('/api/v1/beta/tickets/JRC-1042/actions', A, { view: 'Developer', version: find(await ws(A), 'JRC-1042').version, action: 'assign', input: { dev: 'Paolo Reyes', priority: 'Low' } })).status, 403, 'Developers cannot assign');
+  assert.equal((await post('/api/v1/beta/tickets/JRC-1041/actions', A, { view: 'Developer', version: find(await ws(A), 'JRC-1041').version, action: 'comment', input: { comment: 'x' } })).status, 404, 'not visible, so not actionable');
+  // The Admin view manages but does not do another worker's delivery work.
+  assert.equal((await act(A, 'tickets', 'JRC-1041', 'schedule-meeting', 'Admin', { meeting: '2026-11-01T10:00', location: 'Room' })).status, 403, 'Elyza Cruz is the worker, not the Admin');
   assert.equal((await act(A, 'tickets', 'JRC-1041', 'create-project', 'Requestor', {})).status, 403, 'the Requestor view may not');
-  assert.equal((await act(B, 'tickets', 'JRC-1043', 'reason', 'Requestor', { status: 'Cancelled', reason: 'Not mine' })).status, 403, 'only the requester (or sample requests) in Requestor view');
+  assert.equal((await act(B, 'tickets', 'JRC-1043', 'reason', 'Requestor', { status: 'Cancelled', reason: 'Not mine' })).status, 404, 'another member\'s request is not in this member\'s Requestor view');
   // Real roles and real APIs are unaffected by simulated views.
   assert.equal((await call('/api/v1/users', { cookie: A })).status, 403);
   assert.equal((await call('/api/v1/me', { cookie: A })).json.user.role, 'Requestor');
   assert.equal(await db.collection('users').countDocuments({ role: { $ne: 'Requestor' } }), 0, 'no account was promoted');
 });
 
-test('full lifecycle across all three views, including a returned correction, with actor and view recorded', async () => {
+test('Project lifecycle: mandatory meeting, locked agreement, timeline, evidence, correction, dual confirmation, closure', async () => {
   const id = 'JRC-1043';
-  const step = async (cookie, action, view, input, expect = 200) => { const r = await act(cookie, 'tickets', id, action, view, input); assert.equal(r.status, expect, `${action} as ${view}: ${r.text}`); return r.json?.tickets?.[0]; };
+  const step = async (cookie, action, view, input, expect = 200) => { const r = await act(cookie, 'tickets', id, action, view, input); assert.equal(r.status, expect, `${action} as ${view}: ${r.text}`); return r.json?.tickets?.[0] || r.json; };
   await step(A, 'status', 'Admin', { status: 'Under review' });
   await step(A, 'reason', 'Admin', { status: 'Waiting for information', reason: 'Which columns?' });
   await step(A, 'comment', 'Requestor', { comment: 'Date, amount, region.' });
   await step(A, 'status', 'Requestor', { status: 'Under review' });
   let t = await step(B, 'assign', 'Admin', { dev: 'Miguel Santos', priority: 'High' });
   assert.equal(t.status, 'Assigned'); assert.equal(t.priority, 'High');
+  const task = (title, start, end) => ({ title, requirement: `Req ${title}`, criteria: `Crit ${title}`, start, end, owner: 'Miguel Santos' });
+  const plan = { projectName: 'Shared project', date: '2026-12-15', tasks: [task('Build', '2026-11-10', '2026-11-20'), task('Test', '2026-11-21', '2026-12-01')] };
+  let r = await step(B, 'create-project', 'Developer', plan, 409);
+  assert.match(r.message, /requirements meeting and a locked agreement/, 'a Project cannot be planned without the meeting and agreement');
+  await step(B, 'status', 'Developer', { status: 'In progress' }, 409);
+  await step(B, 'record-agreement', 'Developer', { notes: 'n', requirements: 'r', criteria: 'c' }, 409);
   t = await step(B, 'schedule-meeting', 'Developer', { meeting: '2026-11-03T10:00', location: 'JARC room' });
   assert.equal(t.status, 'Meeting scheduled');
+  await step(B, 'record-agreement', 'Developer', { notes: 'n', requirements: 'r', criteria: 'c' }, 409);
   await step(A, 'confirm-meeting', 'Requestor', {});
-  const task = (title, start, end) => ({ title, requirement: `Req ${title}`, criteria: `Crit ${title}`, start, end, owner: 'Miguel Santos' });
-  await step(B, 'create-project', 'Developer', { projectName: 'Shared project', requirements: 'Build it.', criteria: 'Works.', date: '2026-12-15', tasks: [task('Build', '2026-11-10', '2026-11-05')] }, 400);
-  await step(B, 'create-project', 'Developer', { projectName: 'Shared project', requirements: 'Build it.', criteria: 'Works.', date: '2026-12-15', tasks: [task('Build', '2026-11-10', '2026-12-20')] }, 400);
-  t = await step(B, 'create-project', 'Developer', { projectName: 'Shared project', requirements: 'Build it.', criteria: 'Works.', date: '2026-12-15', tasks: [task('Build', '2026-11-10', '2026-11-20'), task('Test', '2026-11-21', '2026-12-01')] });
-  assert.equal(t.project, 'PRJ-1043'); assert.equal(t.status, 'Planning'); assert.equal(t.tasks.length, 2);
-  await step(B, 'create-project', 'Developer', { projectName: 'Again', requirements: 'x', criteria: 'x', date: '2026-12-15', tasks: [task('X', '2026-11-10', '2026-11-11')] }, 409);
+  await step(B, 'record-agreement', 'Developer', { notes: '', requirements: 'Build it.', criteria: 'Works.' }, 400);
+  t = await step(B, 'record-agreement', 'Developer', { notes: 'Met on site.', requirements: 'Build it.', criteria: 'Works.' });
+  assert.equal(t.agreementDraft.requirements, 'Build it.'); assert.equal(t.agreements, undefined);
+  t = await step(A, 'confirm-agreement', 'Requestor', {});
+  assert.equal(t.agreementDraft.requestor.name, 'Member 1'); assert.equal(t.agreements, undefined, 'one confirmation never locks it');
+  await step(B, 'confirm-agreement', 'Admin', {}, 403);
+  await step(A, 'confirm-agreement', 'Requestor', {}, 409);
+  t = await step(B, 'confirm-agreement', 'Developer', {});
+  assert.equal(t.agreements.length, 1); assert.equal(t.agreementDraft, undefined);
+  assert.deepEqual([t.agreements[0].version, t.agreements[0].worker.name, t.agreements[0].requestor.name], [1, 'Miguel Santos', 'Member 1']);
+  await step(B, 'record-agreement', 'Developer', { notes: 'n', requirements: 'Changed.', criteria: 'c' }, 409);
+  await step(B, 'edit-scope', 'Developer', { requirements: 'Changed.' }, 409);
+  await step(B, 'create-project', 'Developer', { ...plan, tasks: [task('Build', '2026-11-10', '2026-11-05')] }, 400);
+  await step(B, 'create-project', 'Developer', { ...plan, tasks: [task('Build', '2026-11-10', '2026-12-20')] }, 400);
+  t = await step(B, 'create-project', 'Developer', { ...plan, requirements: 'Ignored', criteria: 'Ignored' });
+  assert.equal(t.project, 'PRJ-1043'); assert.equal(t.status, 'Planning'); assert.equal(t.tasks.length, 2); assert.equal(t.dueDate, '2026-12-15');
+  assert.equal(t.requirements, 'Build it.', 'requirements come from the locked agreement, not the timeline form');
+  await step(B, 'create-project', 'Developer', plan, 409);
   t = await step(B, 'save-task', 'Developer', { index: 1, task: { ...task('Test', '2026-11-21', '2026-12-02'), done: false } });
-  assert.equal(t.tasks[1].end, '2026-12-02');
-  await step(B, 'edit-scope', 'Developer', { projectName: 'Shared project', requirements: 'Build it.', criteria: 'Works.', date: '2026-11-30' }, 400);
+  assert.equal(t.tasks[1].end, '2026-12-02'); assert.match(t.history.at(-1).text, /Schedule changed from 2026-11-21 → 2026-12-01 to 2026-11-21 → 2026-12-02/, 'scheduling changes are audited');
+  await step(B, 'save-task', 'Developer', { index: 1, task: { ...task('Test', '2026-11-21', '2026-12-20'), done: false } }, 400);
   await step(B, 'toggle-task', 'Developer', { index: 0, done: true });
   await step(B, 'status', 'Developer', { status: 'In progress' });
-  await step(B, 'submit-acceptance', 'Developer', { summary: 'Tested.' }, 400);
+  await step(B, 'worker-complete', 'Developer', { summary: 'Tested.' }, 400);
   await step(B, 'toggle-task', 'Developer', { index: 1, done: true });
-  t = await step(B, 'submit-acceptance', 'Developer', { summary: 'Tested.' });
-  assert.equal(t.status, 'Awaiting acceptance');
+  r = await step(B, 'worker-complete', 'Developer', { summary: 'Tested.' }, 400);
+  assert.match(r.message, /evidence/);
+  await step(B, 'add-evidence', 'Developer', { links: [{ url: 'javascript:alert(1)' }] }, 400);
+  await step(B, 'add-evidence', 'Developer', { links: [{ url: 'https://user:pw@example.com/' }] }, 400);
+  await step(B, 'add-evidence', 'Developer', { links: [] }, 400);
+  await step(B, 'add-evidence', 'Developer', { files: [{ id: 'aaaaaaaaaaaaaaaaaaaaaaaa', name: 'forged.pdf', size: 1 }] }, 400);
+  await step(A, 'add-evidence', 'Requestor', { links: [{ url: 'https://example.com/' }] }, 403);
+  t = await step(B, 'add-evidence', 'Developer', { links: [{ url: 'https://reports.example.com/build/42', label: 'Build 42' }] });
+  assert.deepEqual(t.evidence.map(x => [x.kind, x.url, x.label]), [['link', 'https://reports.example.com/build/42', 'Build 42']]);
+  t = await step(B, 'worker-complete', 'Developer', { summary: 'Tested.' });
+  assert.equal(t.status, 'Awaiting acceptance'); assert.equal(t.completion.worker.name, 'Miguel Santos'); assert.equal(t.completion.requestor, null);
+  await step(B, 'add-evidence', 'Developer', { links: [{ url: 'https://example.com/late' }] }, 409);
+  await step(B, 'status', 'Admin', { status: 'Closed' }, 409);
+  await step(B, 'requestor-confirm', 'Developer', {}, 403);
   t = await step(A, 'reason', 'Requestor', { status: 'In progress', reason: 'Totals are wrong.' });
   assert.equal(t.status, 'In progress'); assert.equal(t.tasks[1].done, false, 'correction reopens the last task');
+  assert.deepEqual([t.completion.worker, t.completion.requestor, t.completion.round], [null, null, 2], 'the earlier confirmation no longer counts');
+  assert.equal(t.corrections[0].reason, 'Totals are wrong.'); assert.equal(t.completion.log[0].worker.name, 'Miguel Santos');
   await step(B, 'toggle-task', 'Developer', { index: 1, done: true });
-  await step(B, 'submit-acceptance', 'Developer', { summary: 'Fixed.' });
-  await step(A, 'status', 'Requestor', { status: 'Ready for release' });
+  await step(B, 'worker-complete', 'Developer', { summary: 'Fixed.' });
+  await step(B, 'status', 'Admin', { status: 'Closed' }, 409);
+  t = await step(A, 'requestor-confirm', 'Requestor', {});
+  assert.equal(t.status, 'Ready for release'); assert.equal(t.completion.requestor.name, 'Member 1');
+  r = await step(B, 'status', 'Admin', { status: 'Closed' }, 409);
+  assert.match(r.message, /release or handover/, 'a Project is released or handed over before closure');
+  await step(B, 'status', 'Developer', { status: 'Closed' }, 403);
   await step(B, 'status', 'Developer', { status: 'Released' });
   t = await step(A, 'status', 'Admin', { status: 'Closed' });
   assert.equal(t.status, 'Closed');
-  assert.ok(t.history.some(h => h.actor === 'Member 2' && h.view === 'Developer' && h.text.startsWith('Project created')));
+  assert.ok(t.history.some(h => h.actor === 'Member 2' && h.view === 'Developer' && h.text.startsWith('Project timeline created from agreement v1')));
   assert.ok(t.history.some(h => h.actor === 'Member 1' && h.view === 'Admin' && h.text === 'Admin: status changed to Closed.'));
-  assert.ok(t.version > 15, 'every saved step created a new version');
+  assert.ok(t.version > 20, 'every saved step created a new version');
+});
+
+test('Ticket lifecycle with Admin self-assignment: no meeting or project, independent Requestor confirmation', async () => {
+  const made = await post('/api/v1/beta/tickets', B, { view: 'Requestor', requestId: requestId(), input: newRequest({ title: 'Reset a printer', type: 'Ticket', category: 'Bug / issue' }) });
+  const id = made.json.created;
+  const step = async (cookie, action, view, input, expect = 200) => { const r = await act(cookie, 'tickets', id, action, view, input); assert.equal(r.status, expect, `${action} as ${view}: ${r.text}`); return r.json?.tickets?.[0] || r.json; };
+  let t = await step(A, 'assign', 'Admin', { dev: 'Alex Admin', priority: 'Low' });
+  assert.equal(t.dev, 'Alex Admin'); assert.match(t.history.at(-1).text, /assigned it to themselves/);
+  assert.equal((await call(`/api/v1/beta/tickets/${id}?view=Developer`, { cookie: A })).status, 404, 'not the sample developer\'s work');
+  await step(A, 'create-project', 'Admin', { projectName: 'x', date: '2026-12-15', tasks: [] }, 409);
+  t = await step(A, 'status', 'Admin', { status: 'In progress' });
+  assert.equal(t.status, 'In progress', 'a Ticket starts without a meeting or project');
+  await step(A, 'add-evidence', 'Admin', { links: [{ url: 'http://intranet.example/printer', label: 'Service log' }] });
+  t = await step(A, 'worker-complete', 'Admin', { summary: 'Printer reset and tested.' });
+  assert.equal(t.completion.worker.name, 'Alex Admin'); assert.equal(t.completion.worker.view, 'Admin');
+  await step(A, 'requestor-confirm', 'Admin', {}, 403);
+  await step(A, 'status', 'Admin', { status: 'Closed' }, 409);
+  t = await step(B, 'requestor-confirm', 'Requestor', {});
+  assert.equal(t.status, 'Ready for release'); assert.equal(t.completion.requestor.name, 'Member 2');
+  t = await step(A, 'status', 'Admin', { status: 'Closed' });
+  assert.equal(t.status, 'Closed', 'a Ticket closes after both confirmations, without a separate release step');
 });
 
 test('conflicting updates are refused instead of silently overwritten', async () => {
@@ -193,6 +263,7 @@ test('linked scope change: assessment, agreement, approval, delivery, and reject
   await step(A, 'status', 'Admin', { status: 'Assessment' });
   await step(B, 'assess', 'Developer', { impact: 'Adds a filter.', effort: '2 days', date: '2026-11-15' });
   await step(B, 'agree', 'Requestor', {}, 200); // JRC-1042 is a shared sample request, so any member may act as its requester
+  assert.equal((await act(B, 'changes', id, 'approve', 'Developer', {})).status, 403, 'only an Admin approves');
   let r = await step(A, 'approve', 'Admin', {});
   assert.equal(r.changes[0].status, 'Approved'); assert.ok(r.tickets[0].tasks.some(t => t.title === `${id}: Add region filter` && !t.done));
   await step(B, 'status', 'Developer', { status: 'In progress' });
@@ -201,7 +272,7 @@ test('linked scope change: assessment, agreement, approval, delivery, and reject
   r = await step(B, 'status', 'Developer', { status: 'Released' });
   assert.ok(r.tickets[0].tasks.find(t => t.title.startsWith(id + ':')).done, 'release completes the change task');
   r = await step(A, 'status', 'Admin', { status: 'Closed' });
-  assert.equal(r.changes[0].status, 'Closed'); assert.equal(r.changes[0].approvedBy, 'Admin');
+  assert.equal(r.changes[0].status, 'Closed'); assert.equal(r.changes[0].approvedBy, 'Alex Admin');
   await act(A, 'changes', 'CR-201', 'status', 'Admin', { status: 'Assessment' });
   const rej = await act(A, 'changes', 'CR-201', 'decision', 'Admin', { status: 'Rejected', reason: 'Out of scope.' });
   assert.equal(rej.status, 200); assert.equal(rej.json.changes[0].status, 'Rejected');
@@ -221,7 +292,7 @@ test('reset needs confirmation and restores only the shared beta workspace', asy
   const beforeCounts = await counts();
   assert.equal((await post('/api/v1/beta/reset', A, { confirm: 'reset' })).status, 400);
   assert.ok(find(await ws(A), 'JRC-1043'), 'unchanged after a refused reset');
-  const res = await post('/api/v1/beta/reset', A, { confirm: 'RESET' });
+  const res = await post('/api/v1/beta/reset', A, { confirm: 'RESET', view: 'Admin' });
   assert.equal(res.status, 200); assert.equal(res.json.tickets.length, 6); assert.ok(!find(res.json, 'JRC-1043'));
   assert.deepEqual(await counts(), beforeCounts, 'accounts, sessions, and other collections untouched');
   assert.equal((await call('/api/v1/me', { cookie: B })).status, 200, 'sessions still valid');

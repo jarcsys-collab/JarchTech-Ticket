@@ -1,16 +1,16 @@
 /* Signed-in mode only: the server adds this script (and window.JARC_SESSION) when AUTH_MODE=entra.
    Shows who is signed in, the Workspace switch (My workspace or Beta simulation), Settings (email reminders),
-   a Sign out button, and the Admin Users screen. The role shown comes from the server; role and access changes go
-   through the admin API, which the server checks on every request. If an Admin changes your role while the page is
-   open, the page reloads with the new role when you return to it. */
+   a Sign out button, and the Users screen for Admins (the only role that manages users and roles). The role shown
+   comes from the server; role and access changes go through the users API, which the server checks on every request.
+   If an Admin changes your role while the page is open, the page reloads with the new role when you return to it. */
 (function () {
   const me = window.JARC_SESSION;
   if (!me) return;
   const ROLES = ['Requestor', 'Developer', 'Admin'];
   const ERRORS = {
     'invalid-email': 'Enter a valid work email address.', 'invalid-role': 'Choose a role.', 'already-exists': 'That email address already has an account or invitation.',
-    'cannot-change-self': 'You cannot change your own role or access.', 'last-developer': 'At least one active Developer must remain.', 'changed-meanwhile': 'This person was changed by someone else meanwhile. Review and try again.',
-    'invitation-not-accepted': 'This person has not signed in yet, so their invitation is still pending.', 'developer-only': 'Only Developers can manage users and roles.',
+    'cannot-change-self': 'You cannot change your own role or access.', 'last-admin': 'At least one active Admin must remain.', 'changed-meanwhile': 'This person was changed by someone else meanwhile. Review and try again.',
+    'invitation-not-accepted': 'This person has not signed in yet, so their invitation is still pending.', 'admin-only': 'Only Admins can manage users and roles.',
     'cross-origin': 'The request was blocked because it did not come from JarcTech Ticket.'
   };
 
@@ -85,9 +85,9 @@
   }
   if (inspecting) showInspectionBanner();
   if (sharedBeta) showBetaBanner();
-  // Real user management is never part of inspection or the simulation's views: only real Developer accounts get it,
+  // Real user management is never part of inspection or the simulation's views: only real Admin accounts get it,
   // and the server refuses everyone else whatever the page shows.
-  if (me.role === 'Developer' && !inspecting) {
+  if (me.role === 'Admin' && !inspecting) {
     const usersButton = document.createElement('button');
     usersButton.className = 'secondary';
     usersButton.id = 'manage-users';
@@ -118,7 +118,7 @@
     banner.innerHTML = `<strong>Beta simulation — test data</strong><span id="beta-detail"></span><div class="actions"><button class="secondary" id="reset-beta">Reset beta workspace</button></div>`;
     document.querySelector('main').insertBefore(banner, document.querySelector('main').firstChild);
     // The current view comes from the beta client (the selector only shows it once the shared records have loaded).
-    const describe = v => `Shared test records saved on the server for everyone in the beta, separate from My workspace. You are simulating the ${v} view${v === 'Developer' ? ' (labelled as sample developer Miguel Santos): every Admin ability; managing real users stays on the Users screen for real Developer accounts' : v === 'Admin' ? ': manage and deliver every ticket, no user management' : ': your own and the sample requests'}. Your account and real role (${me.role}) do not change, and simulated views give no access to real tickets or accounts. Nothing here is emailed.`;
+    const describe = v => `Shared test records saved on the server for everyone in the beta, separate from My workspace. You are simulating the ${v} view${v === 'Developer' ? ', acting as sample developer Miguel Santos: only work assigned to him; plan, add evidence, and mark work done' : v === 'Admin' ? ', acting as test Admin Alex Admin: every record; review, assign (to a sample developer or yourself), approve, and close. Real user management is not available here' : ': your own and the sample requests; confirm meetings, agreements, and completion'}. Each view is a different test identity, so worker and Requestor confirmations stay independent. Your account and real role (${me.role}) do not change, and simulated views give no access to real tickets or accounts. Nothing here is emailed.`;
     $('#beta-detail').textContent = describe(window.JARC_BETA.view);
     $('#demo-role').addEventListener('change', e => { $('#beta-detail').textContent = describe(e.target.value); });
     $('#reset-beta').onclick = () => {
@@ -189,10 +189,10 @@
   const message = err => ERRORS[err.message] || 'The change could not be saved. Please try again.';
 
   async function openUsers() {
-    open('<div class="tagline">DEVELOPER</div><h2>Users</h2><p>Loading…</p>');
+    open('<div class="tagline">ADMIN</div><h2>Users</h2><p>Loading…</p>');
     let users;
     try { users = (await api('GET', '/api/v1/users')).users; }
-    catch (err) { return open(`<div class="tagline">DEVELOPER</div><h2>Users</h2><div class="banner">${esc(message(err))}</div>`); }
+    catch (err) { return open(`<div class="tagline">ADMIN</div><h2>Users</h2><div class="banner">${esc(message(err))}</div>`); }
     const rows = users.map(u => {
       const self = u.email === me.email;
       const role = self ? esc(u.role) : `<select data-user="${esc(u.id)}" data-field="role" aria-label="Role for ${esc(u.email)}">${ROLES.map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select>`;
@@ -206,7 +206,7 @@
     const policy = me.accessPolicy === 'tenant-members'
       ? 'Beta access: every member account of the company tenant can sign in and starts as a Requestor. Guests and other organizations are refused. Invite someone here to give them a different role from their first sign-in.'
       : 'Only invited people can use JarcTech Ticket. An invitation becomes active when that person first signs in with the same Microsoft work email.';
-    open(`<div class="tagline">DEVELOPER</div><h2>Users</h2><p>${policy} Roles are set here, never by the sign-in itself. Disabled people cannot sign in under either policy.</p><p class="read-only">Requestor: own requests. Admin: all tickets, management, and delivery. Developer: everything an Admin can do, plus users and roles. At least one active Developer always remains.</p>`
+    open(`<div class="tagline">ADMIN</div><h2>Users</h2><p>${policy} Roles are set here, never by the sign-in itself. Disabled people cannot sign in under either policy.</p><p class="read-only">Requestor: submits and tracks own requests and confirms completion. Developer: plans and delivers the work assigned to them, and sees their own requests. Admin: every request, users and roles, assignment (to a Developer or themselves), and final closure. At least one active Admin always remains, and nobody can change their own role or access.</p>`
       + `
       <div class="table-wrap"><table class="users-table"><thead><tr><th>Person</th><th>Role</th><th>Access</th></tr></thead><tbody>${rows}</tbody></table></div>
       <h3>Invite someone</h3><form id="invite-form"><div class="field-grid"><label class="full">Work email *<input name="email" type="email" required autocomplete="off"></label><label>Display name<input name="displayName" maxlength="120"></label><label>Role *<select name="role" required>${ROLES.map(r => `<option>${r}</option>`).join('')}</select></label></div><div class="actions"><button class="primary">Send invitation</button></div></form>`);

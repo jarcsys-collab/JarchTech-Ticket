@@ -5,7 +5,8 @@
 // - Every write carries the record version it was based on; a stale version is refused (409) instead of overwriting.
 // - Creation requests carry a requestId, so a repeated submission returns the first result instead of a duplicate.
 // - Activity entries record the signed-in actor and the capacity (view) they acted in.
-// - Attachments are uploaded first, then added to a new request or a comment by id; downloads follow ticket access.
+// - Attachments are uploaded first, then added to a new request, a comment, or completion evidence by id; downloads
+//   follow ticket access. Evidence files come only from the caller's own claimed uploads, never from the request body.
 // - Saved actions notify the inboxes involved; search reads the records the member may see, page by page.
 // - Records that a member may not see answer "not found", in every route (lists, search, details, files, actions).
 const WorkflowCore = require('../../public/workflow-core.js');
@@ -41,7 +42,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   const files = createAttachments({
     db, workspace: WORKSPACE, log, now,
     names: { attachments: names.attachments, bucket: names.bucket, tickets: names.tickets },
-    canSeeTicket: async (actor, id) => { const t = id && await tickets.findOne({ workspace: WORKSPACE, id }); return Boolean(t && await policy.canSee(actor, t)); }
+    canSeeTicket: async (actor, id) => { const t = id && await tickets.findOne({ workspace: WORKSPACE, id }); return Boolean(t && await policy.canSee(actor, t, null, 'download')); }
   });
   const notify = createNotifications({ db, workspace: WORKSPACE, collection: names.notifications, addressing: policy.addressing, log, stamp });
   const toClient = ({ _id, workspace, requestId, ...rest }) => rest;
@@ -49,10 +50,11 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   const withFiles = (text, claimed) => claimed ? `${text} (${claimed.list.length} attachment${claimed.list.length === 1 ? '' : 's'})` : text;
   const notFound = () => new HttpError(404, 'not-found');
 
-  // A visible ticket by id, or 404 (also when it exists but this member may not see it).
-  async function visibleTicket(user, id) {
+  // A visible ticket by id, or 404 (also when it exists but this member may not see it). view: the simulated view
+  // (beta only; My workspace access comes from the account).
+  async function visibleTicket(user, id, view) {
     const t = await tickets.findOne({ workspace: WORKSPACE, id });
-    if (!t || !await policy.canSee(user, t)) throw notFound();
+    if (!t || !await policy.canSee(user, t, view)) throw notFound();
     return t;
   }
   // Runs fn(ctx) for each capacity the member has on this ticket until one is allowed. Each try works on fresh copies,
@@ -79,8 +81,8 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
       .map(({ text, time }) => ({ text, time }));
   }
   // Everything this member may see, for the dashboard and details. (Lists are searched page by page.)
-  async function workspace(user) {
-    const filter = await policy.visible(user);
+  async function workspace(user, view) {
+    const filter = await policy.visible(user, view);
     const ts = await tickets.find({ workspace: WORKSPACE, ...filter }).sort({ createdAt: -1, id: -1 }).toArray();
     const cs = await changes.find({ workspace: WORKSPACE, ticket: { $in: ts.map(t => t.id) } }).sort({ createdAt: -1, id: -1 }).toArray();
     return { tickets: ts.map(toClient), changes: cs.map(toClient), notices: await notices(filter), ...(policy.extras ? await policy.extras(user) : {}) };
@@ -128,10 +130,11 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     const raw = body.input || {};
     if (!WorkflowCore.DEPARTMENTS.includes(raw.department)) throw new WorkflowCore.WorkflowError('invalid', 'Choose a department.');
     if (!WorkflowCore.CATEGORIES.includes(raw.category)) throw new WorkflowCore.WorkflowError('invalid', 'Choose a request category.');
+    if (!WorkflowCore.TYPES.includes(raw.type)) throw new WorkflowCore.WorkflowError('invalid', 'Choose a request type: Ticket or Project.');
     if (TL.day(raw.date) === null) throw new WorkflowCore.WorkflowError('invalid', 'Enter a valid requested target date.');
     if (String(raw.criteria || '').length > 5000) throw new WorkflowCore.WorkflowError('invalid', 'Acceptance criteria is too long (maximum 5000 characters).');
     // The requester is always the signed-in member, whatever the form says. Field order matches the request form.
-    const input = { title: String(raw.title || '').trim(), name: actor.displayName || actor.email, department: raw.department, date: raw.date, category: raw.category, description: String(raw.description || '').trim(), criteria: String(raw.criteria || '').trim() };
+    const input = { title: String(raw.title || '').trim(), type: raw.type, name: actor.displayName || actor.email, department: raw.department, date: raw.date, category: raw.category, description: String(raw.description || '').trim(), criteria: String(raw.criteria || '').trim() };
     const at = now();
     const prior = await tickets.findOne({ workspace: WORKSPACE, requestId: body.requestId });
     if (prior) {
@@ -154,16 +157,18 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   }
 
   async function ticketAction(actor, id, body) {
-    const current = await visibleTicket(actor, id);
+    const current = await visibleTicket(actor, id, body.view);
     if (body.version !== current.version) throw await conflict('tickets', id);
     const at = now();
     const input = { ...(body.input || {}) };
+    delete input.files; // evidence files are only ever the caller's own claimed uploads (below)
     const contexts = await policy.contexts(actor, current, body);
-    // Only comments carry attachments. A comment may be files only; it then gets a short note.
-    const claimed = body.action === 'comment' ? await files.claim(actor, input.attachments) : null;
+    // Comments and completion evidence carry attachments. A comment may be files only; it then gets a short note.
+    const claimed = ['comment', 'add-evidence'].includes(body.action) ? await files.claim(actor, input.attachments) : null;
     let saved = null, next, ctx;
     try {
-      if (claimed && !String(input.comment || '').trim()) input.comment = `Shared ${claimed.list.length} attachment${claimed.list.length === 1 ? '' : 's'}.`;
+      if (body.action === 'add-evidence') input.files = claimed ? claimed.list : [];
+      if (body.action === 'comment' && claimed && !String(input.comment || '').trim()) input.comment = `Shared ${claimed.list.length} attachment${claimed.list.length === 1 ? '' : 's'}.`;
       ({ ctx, next } = tryAs(contexts, c => {
         const copy = clone(current);
         const notes = WorkflowCore.ticketAction(copy, body.action, input, c);
@@ -180,7 +185,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
 
   async function createChange(actor, ticketId, body) {
     if (!REQUEST_ID.test(String(body.requestId || ''))) throw new HttpError(400, 'invalid-request-id');
-    const ticket = await visibleTicket(actor, ticketId);
+    const ticket = await visibleTicket(actor, ticketId, body.view);
     const prior = await changes.findOne({ workspace: WORKSPACE, requestId: body.requestId });
     if (prior) {
       if (prior.ticket !== ticketId) throw new HttpError(409, 'request-id-in-use');
@@ -210,7 +215,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   async function changeAction(actor, id, body) {
     const current = await changes.findOne({ workspace: WORKSPACE, id });
     if (!current) throw notFound();
-    let ticket = await visibleTicket(actor, current.ticket);
+    let ticket = await visibleTicket(actor, current.ticket, body.view);
     if (body.version !== current.version) throw await conflict('changes', id);
     const at = now();
     const contexts = await policy.contexts(actor, ticket, body);
@@ -253,13 +258,15 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     try { query = ListFilter.normalize(params, { accounts: !policy.simulated }); }
     catch (err) { if (err instanceof ListFilter.FilterError) throw new WorkflowCore.WorkflowError('invalid', err.message); throw err; }
     const { filters: f, scope, page, pageSize } = query;
-    const and = [{ workspace: WORKSPACE }, await policy.searchScope(actor, params)];
+    const and = [{ workspace: WORKSPACE }, await policy.visible(actor, params.get('view'))];
     if (scope === 'projects') and.push({ project: { $type: 'string' } });
     if (f.q) {
       const rx = { $regex: ListFilter.escapeRegex(f.q), $options: 'i' };
       and.push({ $or: ['id', 'project', 'title', 'projectName', 'description'].map(k => ({ [k]: rx })) });
     }
     for (const k of ['status', 'priority', 'department']) if (f[k]) and.push({ [k]: f[k] });
+    if (f.type) and.push(typeFilter(f.type));
+    if (f.stage) and.push(stageFilter(f.stage));
     if (f.dev) and.push(f.dev === ListFilter.UNASSIGNED ? { dev: { $in: ['', null] } } : policy.simulated ? { dev: f.dev } : { devId: f.dev });
     if (f.attention) and.push(attentionFilter(f.attention));
     const filter = { $and: and };
@@ -268,6 +275,28 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
       tickets.find(filter).sort({ createdAt: -1, id: -1 }).skip((page - 1) * pageSize).limit(pageSize).toArray()
     ]);
     return { items: docs.map(toClient), total, page, pageSize };
+  }
+  // The same rules as WorkflowCore.typeOf and stageOf, as queries. Records from before request types count as a
+  // Project when they have a project, otherwise as a Ticket.
+  function typeFilter(type) {
+    return type === 'Project'
+      ? { $or: [{ type: 'Project' }, { type: { $exists: false }, project: { $type: 'string' } }] }
+      : { $or: [{ type: 'Ticket' }, { type: { $exists: false }, project: { $not: { $type: 'string' } } }] };
+  }
+  function stageFilter(stage) {
+    const assigned = { dev: { $nin: ['', null] } };
+    const completing = { $in: WorkflowCore.COMPLETING };
+    const none = { $in: [null] }; // missing or null
+    const worker = { 'completion.worker': { $nin: [null] } }, requestor = { 'completion.requestor': { $nin: [null] } };
+    switch (stage) {
+      case 'closed': return { status: 'Closed' };
+      case 'new': return { status: { $nin: WorkflowCore.FINAL }, dev: { $in: ['', null] } };
+      case 'active': return { ...assigned, status: { $nin: [...WorkflowCore.FINAL, ...WorkflowCore.COMPLETING, 'In progress'] } };
+      case 'awaiting-worker': return { ...assigned, $or: [{ status: 'In progress' }, { status: completing, 'completion.worker': none }, { $and: [{ status: 'Ready for release' }, worker, requestor, typeFilter('Project')] }] };
+      case 'awaiting-requestor': return { ...assigned, status: completing, ...worker, 'completion.requestor': none };
+      case 'ready': return { ...assigned, ...worker, ...requestor, $or: [{ status: 'Released' }, { $and: [{ status: 'Ready for release' }, typeFilter('Ticket')] }] };
+      default: throw new WorkflowCore.WorkflowError('invalid', 'Choose an overview stage from the list.');
+    }
   }
   // The same rules as DeadlineCore, as a query: agreed delivery dates are YYYY-MM-DD strings in the workspace timezone.
   function attentionFilter(kind) {
@@ -278,8 +307,8 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     const range = kind === 'Overdue' ? { $lt: today } : { $gte: today, $lte: DeadlineCore.addDays(today, settings.dueSoonDays) };
     return { status: { $in: DeadlineCore.DELIVERY }, $or: [{ dueDate: { $type: 'string', $ne: '', ...range } }, { dueDate: { $exists: false }, project: { $type: 'string' }, date: { $type: 'string', ...range } }] };
   }
-  async function getTicket(user, id) {
-    const t = await visibleTicket(user, id);
+  async function getTicket(user, id, view) {
+    const t = await visibleTicket(user, id, view);
     return { tickets: [toClient(t)], changes: (await changes.find({ workspace: WORKSPACE, ticket: id }).toArray()).map(toClient) };
   }
 
@@ -298,9 +327,10 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     try {
       let result;
       const ticketMatch = TICKET_PATH.exec(pathname), fileMatch = FILE_PATH.exec(pathname), downloadMatch = DOWNLOAD_PATH.exec(pathname);
-      if (at('/workspace') && get) { files.sweepSoon(); return sendJson(req, res, 200, await workspace(user)); }
+      const view = url.searchParams.get('view');
+      if (at('/workspace') && get) { files.sweepSoon(); return sendJson(req, res, 200, await workspace(user, view)); }
       if (at('/search') && get) return sendJson(req, res, 200, await search(user, url.searchParams));
-      if (ticketMatch && get) return sendJson(req, res, 200, await getTicket(user, ticketMatch[1]));
+      if (ticketMatch && get) return sendJson(req, res, 200, await getTicket(user, ticketMatch[1], view));
       if (at('/notifications') && get) return sendJson(req, res, 200, await notify.list(user, url.searchParams));
       if (at('/notifications/unread') && get) return sendJson(req, res, 200, { unread: await notify.unread(user, url.searchParams.get('view')) });
       if (downloadMatch && get) return await files.download(req, res, user, downloadMatch[1]);
@@ -320,7 +350,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
       else if (at('/reset') && policy.reset) result = await reset(user, body);
       else if (at('/notifications/read')) return sendJson(req, res, 200, await notify.markRead(user, body));
       else return sendJson(req, res, 404, { error: 'not-found' });
-      return sendJson(req, res, result.created && !result.duplicate ? 201 : 200, { ...result, notices: await notices(await policy.visible(user)), ...(at('/reset') ? await workspace(user) : {}) });
+      return sendJson(req, res, result.created && !result.duplicate ? 201 : 200, { ...result, notices: await notices(await policy.visible(user, body.view)), ...(at('/reset') ? await workspace(user, body.view) : {}) });
     } catch (err) {
       if (err instanceof AttachmentError) {
         // An upload refused part-way may leave unread request data; close the connection rather than read it all.
@@ -337,7 +367,8 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
 
   // For the reminder scheduler: active records, and delivery of reminder notifications.
   const scan = async () => {
-    const ts = await tickets.find({ workspace: WORKSPACE, status: { $nin: ['Closed', 'Rejected', 'Cancelled', 'Released'] } }).toArray();
+    // Released work is included: it still awaits the Admin's closure.
+    const ts = await tickets.find({ workspace: WORKSPACE, status: { $nin: ['Closed', 'Rejected', 'Cancelled'] } }).toArray();
     const cs = await changes.find({ workspace: WORKSPACE, ticket: { $in: ts.map(t => t.id) }, status: { $in: ['Submitted', 'Awaiting approval', 'Awaiting acceptance'] } }).toArray();
     return ts.map(t => ({ ticket: t, changes: cs.filter(c => c.ticket === t.id) }));
   };

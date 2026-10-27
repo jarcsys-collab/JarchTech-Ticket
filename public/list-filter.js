@@ -13,13 +13,15 @@
     status: TicketCore.statuses,
     priority: WorkflowCore.PRIORITIES,
     department: WorkflowCore.DEPARTMENTS,
-    dev: [UNASSIGNED, ...TicketCore.people],
-    attention: ['Overdue', 'Due soon', 'Awaiting decision']
+    dev: [UNASSIGNED, ...TicketCore.people, WorkflowCore.SIM_ADMIN],
+    attention: ['Overdue', 'Due soon', 'Awaiting decision'],
+    type: WorkflowCore.TYPES,
+    stage: WorkflowCore.STAGES.map(([key]) => key)
   };
-  const LABELS = { status: 'status', priority: 'priority', department: 'department', dev: 'developer', attention: 'deadline or decision' };
+  const LABELS = { status: 'status', priority: 'priority', department: 'department', dev: 'assignee', attention: 'deadline or decision', type: 'request type', stage: 'overview stage' };
   const ACCOUNT_ID = /^[0-9a-f]{24}$/;
-  const AWAITING = ['Awaiting acceptance', 'Waiting for information', 'Submitted', 'Under review', 'Ready for release'];
-  const empty = () => ({ q: '', status: '', priority: '', department: '', dev: '', attention: '' });
+  const AWAITING = ['Awaiting acceptance', 'Waiting for information', 'Submitted', 'Under review', 'Ready for release', 'Released'];
+  const empty = () => ({ q: '', status: '', priority: '', department: '', dev: '', attention: '', type: '', stage: '' });
 
   class FilterError extends Error {}
 
@@ -59,6 +61,8 @@
     if (f.status && t.status !== f.status) return false;
     if (f.priority && t.priority !== f.priority) return false;
     if (f.department && t.department !== f.department) return false;
+    if (f.type && WorkflowCore.typeOf(t) !== f.type) return false;
+    if (f.stage && WorkflowCore.stageOf(t) !== f.stage) return false;
     if (f.dev && (f.dev === UNASSIGNED ? Boolean(t.dev) : (ACCOUNT_ID.test(f.dev) ? t.devId : t.dev) !== f.dev)) return false;
     if (f.attention) {
       const d = DeadlineCore.deadline(t, ctx.today || DeadlineCore.today(), ctx.settings || DeadlineCore.DEFAULTS);

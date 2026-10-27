@@ -1,9 +1,10 @@
 // In-app notifications, stored per workspace (My workspace: "notifications"; beta simulation: "beta_notifications").
 // Who receives them is decided by an addressing scheme:
-//   simulated (beta)  admin, developer:<sample name>, requestor:sample, member:<userId>. Simulated inboxes are never
-//                     real people found by name, and are never emailed.
-//   accounts (mine)   user:<userId> for the requestor and the assignee, and "admins", the shared staff inbox read by
-//                     every active Admin and Developer account (checked when read, so a role change applies at once).
+//   simulated (beta)  admin, developer:<test identity> (the assigned worker: a sample developer, or the Admin test
+//                     identity when the Admin view assigned the work to itself), requestor:sample, member:<userId>.
+//                     Simulated inboxes are never real people found by name, and are never emailed.
+//   accounts (mine)   user:<userId> for the requestor and the assigned worker, and "admins", the shared inbox read by
+//                     every active Admin account (checked when read, so a role change applies at once).
 // Each notification is one document per inbox and record version (or reminder stage), with a unique key, so retries,
 // repeated saves, and repeated reminder runs never duplicate it. Read state is per signed-in member (readBy). The
 // acting inbox is never notified, and the actor's copy of any other inbox starts as read.
@@ -20,59 +21,68 @@ const requestorInbox = t => (t.requester && !t.requester.sample && t.requester.i
 // Simulated inboxes for the beta workspace; the simulated view is chosen per request.
 const simulated = {
   inboxesFor(user, view) {
-    if (view === 'Admin') return [ADMIN];
+    if (view === 'Admin') return [ADMIN, developerInbox(WorkflowCore.SIM_ADMIN)];
     if (view === 'Developer') return [developerInbox(WorkflowCore.SAMPLE_DEVELOPER)];
     if (view === 'Requestor') return [SAMPLE_REQUESTOR, `member:${user._id}`];
     throw new HttpError(400, 'invalid-view');
   },
-  label: (user, view) => ({ Admin: 'Admin inbox (simulated)', Developer: `Developer inbox · ${WorkflowCore.SAMPLE_DEVELOPER} (sample developer)`, Requestor: 'Requestor inbox · sample requests and your own requests' }[view]),
+  label: (user, view) => ({ Admin: `Admin inbox (simulated) · work assigned to ${WorkflowCore.SIM_ADMIN} (Admin test identity)`, Developer: `Developer inbox · ${WorkflowCore.SAMPLE_DEVELOPER} (sample developer)`, Requestor: 'Requestor inbox · sample requests and your own requests' }[view]),
   resolve: (to, ticket, before) => ({ admin: ADMIN, requestor: requestorInbox(ticket), developer: ticket.dev ? developerInbox(ticket.dev) : null, 'previous-developer': before && before.dev ? developerInbox(before.dev) : null }[to]),
   own: (actor, view, ticket) => new Set(view === 'Requestor' ? [requestorInbox(ticket)] : simulated.inboxesFor(actor, view))
 };
 // Real accounts for My workspace. The view is the capacity the actor acted in (Admin, Developer, or Requestor).
 const accounts = {
-  inboxesFor: user => [`user:${user._id}`, ...(['Admin', 'Developer'].includes(user.role) ? [ADMINS] : [])],
-  label: user => (['Admin', 'Developer'].includes(user.role) ? 'Your notifications and the shared staff inbox (Admins and Developers)' : 'Your notifications'),
+  inboxesFor: user => [`user:${user._id}`, ...(user.role === 'Admin' ? [ADMINS] : [])],
+  label: user => (user.role === 'Admin' ? 'Your notifications and the shared Admin inbox' : 'Your notifications'),
   resolve: (to, ticket, before) => ({
     admin: ADMINS,
     requestor: ticket.requester && ticket.requester.id ? `user:${ticket.requester.id}` : null,
     developer: ticket.devId ? `user:${ticket.devId}` : null,
     'previous-developer': before && before.devId && before.devId !== ticket.devId ? `user:${before.devId}` : null
   }[to]),
-  own: (actor, view) => new Set([`user:${actor._id}`, ...(['Admin', 'Developer'].includes(view) ? [ADMINS] : [])])
+  own: (actor, view) => new Set([`user:${actor._id}`, ...(view === 'Admin' ? [ADMINS] : [])])
 };
 
 // Who hears about a ticket action: [{ type, title, to: ['admin' | 'requestor' | 'developer' | 'previous-developer'] }].
+// 'developer' is the assigned worker (a Developer, or an Admin who assigned the work to themselves).
 function ticketEvents(before, after, action, input = {}) {
   const e = (type, title, ...to) => ({ type, title, to });
   switch (action) {
     case 'created': return [e('submitted', 'New request submitted', 'admin')];
     case 'comment': return [e('comment', 'New comment', 'admin', 'requestor', 'developer')];
     case 'assign': {
-      const out = [e('assigned', before.dev === after.dev ? 'Assignment updated' : 'Assigned to you', 'developer'), e('assigned', before.dev === after.dev ? 'Priority updated' : 'Developer assigned', 'requestor')];
-      if (before.dev && before.dev !== after.dev) out.push(e('reassigned', 'Reassigned to another developer', 'previous-developer'));
+      const out = [e('assigned', before.dev === after.dev ? 'Assignment updated' : 'Assigned to you', 'developer'), e('assigned', before.dev === after.dev ? 'Priority updated' : 'Worker assigned', 'requestor')];
+      if (before.dev && before.dev !== after.dev) out.push(e('reassigned', 'Reassigned to someone else', 'previous-developer'));
       return out;
     }
     case 'reason': return {
       'Waiting for information': [e('info-requested', 'Information requested', 'requestor')],
       Rejected: [e('status', 'Request rejected', 'requestor', 'developer')],
       'On hold': [e('status', 'Put on hold', 'requestor', 'developer')],
-      'In progress': [e('returned', 'Returned for correction', 'developer', 'admin')],
+      'In progress': [e('returned', 'Returned for correction: confirmations cleared', 'developer', 'admin', 'requestor')],
       Cancelled: [e('status', 'Request cancelled', 'admin', 'developer')]
     }[input.status] || [];
     case 'status': return {
       'Under review': before.status === 'Waiting for information' ? [e('status', 'Information provided', 'admin')] : [e('status', 'Under review', 'requestor')],
-      'In progress': [e('status', 'Development started', 'requestor')],
-      'Ready for release': [e('status', 'Delivery accepted', 'developer', 'admin')],
-      Released: [e('status', 'Released', 'admin', 'requestor')],
-      Closed: [e('status', 'Ticket closed', 'requestor', 'developer')]
+      'In progress': [e('status', 'Work started', 'requestor')],
+      Released: [e('status', 'Released or handed over: ready for Admin closure', 'admin', 'requestor')],
+      Closed: [e('status', 'Request closed', 'requestor', 'developer')]
     }[after.status] || [];
+    case 'set-type': return [e('status', `Request type changed to ${after.type}`, 'requestor', 'developer')];
     case 'schedule-meeting': case 'edit-meeting': return [e('meeting', 'Meeting proposed: please confirm', 'requestor')];
     case 'confirm-meeting': return [e('meeting', 'Meeting confirmed', 'developer')];
-    case 'create-project': return [e('project', 'Project created', 'requestor', 'admin')];
-    case 'edit-scope': return before.dueDate !== after.dueDate || before.date !== after.date ? [e('deadline', 'Agreed delivery date changed', 'requestor', 'admin')] : [];
-    case 'submit-acceptance': return [e('acceptance', 'Acceptance requested', 'requestor')];
-    default: return []; // task edits: visible in activity, no alert
+    case 'record-agreement': return [e('agreement', 'Requirements agreement: please confirm', 'requestor')];
+    case 'confirm-agreement': return after.agreements && after.agreements.length && !(before.agreements && before.agreements.length)
+      ? [e('agreement', 'Agreement confirmed by both sides and locked', 'requestor', 'developer', 'admin')]
+      : [e('agreement', 'Agreement confirmed by one side: yours is needed', 'requestor', 'developer')];
+    case 'create-project': return [e('project', 'Project timeline created', 'requestor', 'admin')];
+    case 'worker-complete': return [e('completion', 'Work marked done: please review the evidence and confirm', 'requestor')];
+    case 'withdraw-completion': return [e('completion', 'Worker withdrew their completion', 'requestor')];
+    case 'requestor-confirm': {
+      const ready = after.status === 'Released' || (after.status === 'Ready for release' && after.type !== 'Project' && !(!after.type && after.project));
+      return [e('completion', 'Requestor confirmed completion', 'developer'), ...(ready ? [e('completion', 'Both confirmations recorded: ready for closure', 'admin')] : [])];
+    }
+    default: return []; // task and evidence edits: visible in activity, no alert
   }
 }
 function changeEvents(change, action, input = {}) {
@@ -88,7 +98,7 @@ function changeEvents(change, action, input = {}) {
     }[change.status] || [];
     case 'assess': return [e('change', 'Scope change: your agreement is requested', 'requestor')];
     case 'agree': return [e('change', 'Scope change: approval requested', 'admin')];
-    case 'approve': return [e('change', 'Scope change approved', 'developer', 'requestor')];
+    case 'approve': return [e('change', 'Scope change approved: new agreement version', 'developer', 'requestor')];
     case 'decision': return input.status === 'In progress'
       ? [e('returned', 'Change returned for correction', 'developer')]
       : [e('change', `Scope change ${String(input.status || '').toLowerCase()}`, 'requestor', 'developer')];
@@ -98,7 +108,7 @@ function changeEvents(change, action, input = {}) {
 }
 
 // Resolves events to notification documents for one saved record version.
-// ticket: the linked ticket after the save (for its requester and developer); before: the ticket before (assign).
+// ticket: the linked ticket after the save (for its requester and worker); before: the ticket before (assign).
 function build({ events, record, kind, target, version, ticket, before, text, actor, view, at, workspace, addressing = simulated }) {
   const actorId = String(actor._id);
   const own = addressing.own(actor, view, ticket);

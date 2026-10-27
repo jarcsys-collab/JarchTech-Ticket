@@ -1,4 +1,4 @@
-// Shared setup for the deliberate database commands (db:setup, developer:bootstrap, beta:seed).
+// Shared setup for the deliberate database commands (db:setup, admin:bootstrap, db:migrate-request-types, beta:seed).
 // Reads settings like the server (a local .env never overrides existing values), requires --confirm-db to
 // name the target database exactly, and never prints the connection string.
 const path = require('node:path');

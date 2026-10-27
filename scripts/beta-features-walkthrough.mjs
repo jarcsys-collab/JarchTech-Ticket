@@ -86,7 +86,7 @@ const HELPERS = `window.__w={
   toast(){return document.querySelector('#toast').textContent},
   saveState(){return document.querySelector('.save').dataset.state||''},
   text(){return document.querySelector('#dialog-content').textContent},
-  async server(){const r=await fetch('/api/v1/beta/workspace');return r.json()},
+  async server(){const r=await fetch('/api/v1/beta/workspace?view=Admin');return r.json()},
   async ticket(id){return (await __w.server()).tickets.find(t=>t.id===id)},
   async change(id){return (await __w.server()).changes.find(c=>c.id===id)}
 };true`;
@@ -166,7 +166,7 @@ try {
     section = 'attachments';
     await P1.do(`__w.view('Requestor')`);
     await P1.w(`__w.click('#new-ticket');true`);
-    await P1.w(`__w.set('#request-form [name=title]','FEATURE-WT printer request');__w.set('#request-form [name=department]','Operations');__w.set('#request-form [name=date]','2026-12-18');__w.set('#request-form [name=description]','FEATURE-WT walkthrough request with screenshots.');true`);
+    await P1.w(`__w.set('#request-form [name=title]','FEATURE-WT printer request');__w.set('#request-form [name=type]','Ticket');__w.set('#request-form [name=department]','Operations');__w.set('#request-form [name=date]','2026-12-18');__w.set('#request-form [name=description]','FEATURE-WT walkthrough request with screenshots.');true`);
     await setFiles(P1, '#request-form input[type=file]', ['wt-screenshot.png', 'wt-tool.exe', 'wt-fake.png', 'wt-steps.txt']);
     await uploadsDone(P1);
     await waitFor(P1, `[...document.querySelectorAll('.upload')].filter(e=>!e.classList.contains('uploading')).length===4 && document.querySelectorAll('.upload.done').length===2`);
@@ -228,7 +228,7 @@ try {
     check('the requestor receives the assignment and comments as unread', Number(await badge(P1)) >= 2, await badge(P1));
     await P1.w(`__w.click('#notifications');true`);
     await waitFor(P1, `document.querySelector('.notification')`);
-    check('assignment and comment notifications are listed', await P1.w(`__w.text().includes('Developer assigned') && __w.text().includes('New comment')`));
+    check('assignment and comment notifications are listed', await P1.w(`__w.text().includes('Worker assigned') && __w.text().includes('New comment')`));
     await P1.w(`__w.click('#mark-all');true`);
     check('Mark all as read clears the badge', await waitFor(P1, `document.querySelector('#notice-count').textContent==='' && !document.querySelector('.notification.unread')`));
     await P2.do(`__w.esc();__w.view('Requestor')`);
@@ -255,7 +255,7 @@ try {
 
     // ---------- Search and filters ----------
     section = 'search';
-    await P2.w(`Promise.all(Array.from({length:26},(_,i)=>new Promise(r=>setTimeout(r,i*40)).then(()=>fetch('/api/v1/beta/tickets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({view:'Requestor',requestId:'wt-bulk-'+i+'-'+Date.now(),input:{title:'FEATURE-WT bulk '+i,department:i%2?'IT':'Finance',date:'2026-12-20',category:'Enhancement',description:'Bulk search record '+i,criteria:''}})}).then(r=>{if(!r.ok)throw new Error('bulk create '+r.status)}))))`);
+    await P2.w(`Promise.all(Array.from({length:26},(_,i)=>new Promise(r=>setTimeout(r,i*40)).then(()=>fetch('/api/v1/beta/tickets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({view:'Requestor',requestId:'wt-bulk-'+i+'-'+Date.now(),input:{title:'FEATURE-WT bulk '+i,type:i%3?'Ticket':'Project',department:i%2?'IT':'Finance',date:'2026-12-20',category:'Enhancement',description:'Bulk search record '+i,criteria:''}})}).then(r=>{if(!r.ok)throw new Error('bulk create '+r.status)}))))`);
     await reload(P2);
     const typeSearch = async (P, text) => { await P.w(`__w.set('.search',${JSON.stringify(text)});true`); await sleep(500); await waitFor(P, `!document.querySelector('#records[aria-busy]')`); };
     await typeSearch(P2, 'FEATURE-WT bulk');
@@ -285,7 +285,8 @@ try {
     await typeSearch(P1, 'FEATURE-WT bulk');
     check('the other tester\'s Admin view finds the same shared records', await P1.w(`document.querySelector('#result-count').textContent.startsWith('26 matching')`));
     await P1.do(`__w.view('Developer')`);
-    check('the Developer view is staff: it has the assignee filter like Admin', await P1.w(`!!document.querySelector('#dev-filter')`));
+    await waitFor(P1, `JARC_BETA.view==='Developer' && !document.querySelector('#records[aria-busy]') && document.querySelectorAll('#records tr[data-id]').length>0`);
+    check('the Developer view lists only the assigned work of the sample developer, with no assignee filter', await P1.w(`!document.querySelector('#dev-filter') && document.querySelectorAll('#records tr[data-id]').length>0 && [...document.querySelectorAll('#records tr[data-id]')].every(r=>r.textContent.includes('Miguel Santos'))`), await P1.w(`[!!document.querySelector('#dev-filter'), JARC_BETA.view, document.querySelector('#result-count').textContent, [...document.querySelectorAll('#records tr[data-id]')].map(r=>r.dataset.id).join()].join(' | ')`));
     await P1.w(`__w.click('[data-view="Projects"]');true`); await P1.settle();
     await typeSearch(P1, 'PRJ-');
     check('Projects can be searched by project ID', await P1.w(`document.querySelectorAll('#records tr[data-id]').length>0 && [...document.querySelectorAll('#records .ticket-id')].every(e=>e.textContent.includes('PRJ-'))`));
