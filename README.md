@@ -27,15 +27,17 @@ Use the URL printed in your terminal. Stop the server with Ctrl+C.
 
 - JARC teal styling and the project name **JarcTech Ticket**.
 - Only ticket and project navigation; no Meetings or Change requests sidebar tabs.
-- Admin: Tickets received shows all requestors' tickets for review, priority, assignment, information requests, rejection, and holds.
-- Requestor: My ticket, current request form, progress monitoring, meeting confirmation, comments, and acceptance.
-- Developer: My ticket shows assigned work. Planning meetings remain inside ticket details.
-- Two-step project creation: project name, agreed requirements, criteria, target, then dated tasks.
+- Request types: every request is a **Ticket** (simple work) or a **Project** (mandatory requirements meeting, a locked agreement, and a timeline), chosen on the form and separate from the request category.
+- Admin: Tickets received shows every request, with an **Admin overview** of Tickets and Projects by stage (new, active, awaiting worker completion, awaiting Requestor confirmation, ready for closure, closed, overdue) that drills through to the records. Admins review, request information, assign (to a Developer or themselves), reject, hold, and close.
+- Requestor: My ticket, the request form, progress monitoring, meeting and agreement confirmation, evidence review, completion confirmation or correction, and comments.
+- Developer: Assigned work shows the work assigned to them (and their own requests): meetings, agreements, timelines, tasks, evidence, and their completion confirmation.
+- Two-step project timeline from the locked agreement: project name and delivery target, then dated tasks.
+- Completion proof and two confirmations: the worker adds evidence (files or links) and marks the work done; the Requestor confirms independently; only then can an Admin close it.
 - Projects list opens a Gantt chart with task dates, owner, requirement, task criteria, and completion.
 - Linked scope changes remain inside each ticket and retain assessment, agreement, approval, testing, acceptance, release, and closure.
 - Browser-local persistence, sample data, syntax checks, date tests, static server tests, backend foundation tests, and a GitHub Actions check.
 
-The header's **Demo role** selector replaces the old three-button preview strip. It is a preview aid, not sign-in or access control. Requestor demo identity: Adriane Venzon. Developer demo identity: Miguel Santos.
+The header's **Demo role** selector replaces the old three-button preview strip. It is a preview aid, not sign-in or access control. Requestor demo identity: Adriane Venzon. Developer demo identity: Miguel Santos. Admin demo identity: Alex Admin (used when the Admin assigns work to themselves).
 
 ## Continue with Claude Code and GitHub
 
@@ -80,10 +82,10 @@ There are two modes, chosen with `AUTH_MODE`:
 
 **Rules in both policies:**
 - **Refused:** guests (B2B accounts from other organizations), personal Microsoft accounts, accounts from any other tenant, and disabled users all get an "Access not granted" page, and no account is created. Admins can see refused attempts in the sign-in log.
-- **Roles never come from Microsoft.** Admin and Developer are given only by a JarcTech Developer on the Users screen, by an invitation that names that role, or by the owner's one-time `developer:bootstrap`. Role, group, and directory-role claims are ignored, as is anything sent by the browser.
+- **Roles never come from Microsoft.** Admin and Developer are given only by a JarcTech Admin on the Users screen, by an invitation that names that role, or by the owner's one-time `admin:bootstrap`. Role, group, and directory-role claims are ignored, as is anything sent by the browser.
 - **Existing records win.** An invitation keeps its role on first sign-in. Roles an Admin set are kept on later sign-ins and never reset to Requestor. A disabled or revoked person stays locked out: beta access never creates a replacement account for a disabled email.
 - **One account per Microsoft account.** The account is permanently linked to the person's Entra object ID. If an email is already linked to a different Microsoft account, sign-in is refused for an Admin to resolve.
-- **Restoring invite-only:** remove `ACCESS_POLICY` (or set it to `invite-only`) and restart. Auto-admitted Requestors keep their accounts; a Developer can disable any of them on the Users screen.
+- **Restoring invite-only:** remove `ACCESS_POLICY` (or set it to `invite-only`) and restart. Auto-admitted Requestors keep their accounts; an Admin can disable any of them on the Users screen.
 
 For the beta, the app registration's enterprise application must have **Assignment required = No**. Otherwise Entra itself blocks members who are not individually assigned.
 
@@ -91,7 +93,7 @@ For the beta, the app registration's enterprise application must have **Assignme
 - `Requestor`, `Admin` and `Developer` are stored on the server and read on every request.
 - Any role in the browser (query string, header, cookie, or devtools) is ignored by the server.
 - In signed-in mode the Demo role selector is hidden. The header shows the signed-in name, role, and **Sign out**; Admins also get a **Users** button for invitations, role changes, and disabling access.
-- Nobody can change their own role or access, and the last active Developer cannot be removed.
+- Nobody can change their own role or access, and the last active Admin cannot be removed.
 
 **Sessions:**
 - Stored server-side in MongoDB. Only a hash of each session token is stored.
@@ -103,7 +105,7 @@ For the beta, the app registration's enterprise application must have **Assignme
 >
 > **Protected by the server:**
 > - who can open the app (Microsoft sign-in plus admission policy)
-> - app roles, sessions, and user management (Developers only)
+> - app roles, sessions, and user management (Admins only)
 > - **My workspace tickets**: ownership, assignment, and every read and write (see below)
 >
 > **Not yet production-ready:** no security review or penetration test has been done; attachments are not malware-scanned; audit history covers sign-in, user changes, and beta resets, with ticket activity kept on each ticket.
@@ -116,33 +118,53 @@ With sign-in on, **My workspace** is the main view. Its tickets, projects, comme
 
 | App role | Can see and act on |
 | --- | --- |
-| **Requestor** (default for every newly admitted member) | Their own requests and the projects, comments, attachments, and notifications that belong to them: submit, track, comment, confirm meetings, accept delivery or return it for correction |
-| **Admin** | Every ticket: review, prioritize, assign, request information, reject, hold, and close; and the delivery work (planning meetings, scope, projects, tasks and dates, acceptance requests, release). **No user management.** |
-| **Developer** (highest role) | Everything an Admin can do, plus **exclusive** user and role management: invite people, assign and revoke roles, enable and disable accounts |
+| **Requestor** (default for every newly admitted member) | Their own requests and everything that belongs to them: submit, track, comment, confirm meetings and agreements, review the evidence, and confirm completion or return it for correction |
+| **Developer** | Work assigned to them, plus their own requests: meetings, agreements, timelines, tasks, evidence, and the worker's completion confirmation. **No assignment authority and no user management.** |
+| **Admin** | Every request: review, request information, assign to an active Developer or **themselves**, reject, hold, approve scope changes, and final closure; plus **exclusive** user and role management. An Admin who assigns work to themselves is its worker. |
 
 - **The server derives everything:** ownership comes from the session, never from the browser, and so do the roles and view. Another person's records answer *not found* in every route: lists, search, direct ticket URLs, actions, linked changes, attachment downloads, the activity feed, and notifications.
-- **Capacities:** Admins and Developers act as staff on every ticket. The owner of a request also acts as its Requestor, so a staff member who submits a request can also accept it.
-- **Assignment:** the assignee list shows active Admin and Developer accounts (with their role), never sample people. Delivery reminders go to the assignee; escalations go to the shared staff inbox read by every Admin and Developer. Work assigned to someone who later becomes a Requestor or is disabled stays visible to staff for reassignment.
-- **Role and access changes:** a Developer changes roles and access on the **Users** screen. The server refuses every user-management request from anyone else, including Admins and simulated views.
+- **Capacities:** an Admin acts as Admin on every request; the assigned worker (a Developer, or a self-assigned Admin) does the delivery work; the owner of a request acts as its Requestor.
+- **Assignment:** an Admin chooses an active Developer or themselves, never sample people. Delivery reminders go to the worker; escalations go to the shared Admin inbox. Work assigned to someone who later becomes a Requestor or is disabled stays visible to Admins for reassignment, and the former worker loses access at once.
+- **Independent confirmations:** the worker's and the Requestor's completion confirmations are recorded separately with who, which capacity, and when. One account never confirms both sides: when the Requestor is also the worker, a different Admin reviews for the Requestor side.
+- **Role and access changes:** an Admin changes roles and access on the **Users** screen. The server refuses every user-management request from anyone else, including Developers and simulated views.
   - They apply at once. Disabling an account ends its sessions, and an open page reloads with the new role when the person returns to it.
-  - Nobody can change their own role or access, and the last active Developer can never be demoted or disabled, even when two Developers change each other at the same moment.
+  - Nobody can change their own role or access, and the last active Admin can never be demoted or disabled, even when two Admins change each other at the same moment.
 - **Numbering:** My workspace tickets are numbered from `JRC-2001` (changes from `CR-501`), apart from the beta simulation's numbers.
 - **Simulation is separate:** the header's **Workspace** switch chooses **My workspace** or **Beta simulation** (when enabled). Simulated views and sample people never grant anything in My workspace, and beta records are never converted into real tickets.
 
+### Request types, agreements, and the completion gate
+
+| Step | Ticket | Project |
+| --- | --- | --- |
+| 1. Submit (Requestor) | Request type **Ticket** | Request type **Project** |
+| 2. Review and assign (Admin) | Request information if needed; assign to an active Developer or themselves. The Admin can change the type until planning is agreed. | Same |
+| 3. Plan | Optional meeting | **Mandatory** requirements meeting, confirmed by the Requestor. The worker records the meeting notes, agreed requirements, and acceptance criteria; the worker and the Requestor confirm separately; then the agreement **locks**. The timeline (tasks, owners, dates, delivery target) is created from it. |
+| 4. Work and evidence (worker) | Start work; add evidence | Start development; update tasks; add evidence |
+| 5. Worker marks done | Needs at least one evidence file or link and a delivery and testing summary | Also needs every task done and the locked agreement |
+| 6. Requestor confirms | Reviews the evidence; confirms or returns it for correction | Same |
+| 7. Release or handover (worker) | Optional | Required |
+| 8. Close (Admin only) | After both confirmations | After both confirmations and the handover |
+
+- **Locked agreements:** after locking, nobody edits the requirements, criteria, or delivery target directly (the server refuses it). New or changed requirements go through the linked scope change: Admin review, worker impact assessment, Requestor agreement, Admin approval. Approval adds **a new agreement version**; earlier versions are kept and shown.
+- **Scheduling:** task progress stays available; task dates can move within the delivery target, and every change is recorded in the activity with its old and new dates. Only an approved scope change moves the delivery target, with a note of the old and new target.
+- **Stale confirmations never close changed work:** returning for correction, the worker withdrawing their completion, reassignment while awaiting confirmation, or an approved scope change clears earlier confirmations. Cleared confirmations and correction reasons stay on the record.
+- **Evidence:** files reuse the attachment storage and permissions (only the uploader's own uploads can become evidence; downloads follow ticket access and are always served as attachments). Links must be plain `http` or `https` addresses without credentials; they are shown as links that open in a new tab and are never fetched by the server.
+- **Older records:** `npm run db:migrate-request-types` classifies existing requests (linked project: Project; otherwise Ticket). Projects created before locked agreements and requests completed before dual confirmation are not given invented confirmations: details list the missing steps, and the worker and Requestor can still record them.
+
 ### Due dates, reminders, and escalation
 
-- **Two dates:** the **requested target date** is the requestor's, set on the form. The **agreed delivery date** is the target the developer confirms when creating the project, and it changes only through project details or an approved scope change. Lists and details show both, with **Overdue** and **Due soon** labels and a summary of overdue, due-soon, and awaiting-decision tickets that doubles as a filter.
+- **Two dates:** the **requested target date** is the requestor's, set on the form. The **agreed delivery date** is the target the worker sets when creating a Project's timeline from the locked agreement, and it changes only through an approved scope change. Lists and details show both, with **Overdue** and **Due soon** labels and a summary of overdue, due-soon, and awaiting-decision tickets that doubles as a filter.
 - **Timezone:** dates are calendar days in `WORKSPACE_TIMEZONE` (default **Asia/Manila**).
 - **Reminders** are in-app notifications (the bell), created on the server. They never depend on a browser being open. Default thresholds, all whole days:
 
 | Situation | Who | When (default) | Variable |
 | --- | --- | --- | --- |
-| Delivery due soon | Assigned developer | 2 days before the agreed date | `REMINDER_DUE_SOON_DAYS` |
-| Delivery overdue | Assigned developer | The day after the agreed date | |
+| Delivery due soon | Assigned worker | 2 days before the agreed date | `REMINDER_DUE_SOON_DAYS` |
+| Delivery overdue | Assigned worker | The day after the agreed date | |
 | Overdue escalation | Admins | 2 days overdue | `REMINDER_ESCALATE_OVERDUE_DAYS` |
-| Delivery awaiting acceptance | Requestor | After 2 days | `REMINDER_ACCEPTANCE_DAYS` |
-| Acceptance escalation | Admins | After 5 days | `REMINDER_ESCALATE_ACCEPTANCE_DAYS` |
-| Request awaiting review, information requested, meeting awaiting confirmation, release pending, scope change awaiting agreement or approval | Whoever must act | After 2 days | `REMINDER_PENDING_DAYS` |
+| Completed work awaiting the Requestor's confirmation | Requestor | After 2 days | `REMINDER_ACCEPTANCE_DAYS` |
+| Confirmation escalation | Admins | After 5 days | `REMINDER_ESCALATE_ACCEPTANCE_DAYS` |
+| Request awaiting review, information requested, meeting or agreement awaiting confirmation, release or handover pending, both confirmations recorded (closure), scope change awaiting agreement or approval | Whoever must act | After 2 days | `REMINDER_PENDING_DAYS` |
 
 - **Each reminder is sent once.** Its key is the record, the reminder, and the deadline or state it is about, so repeated runs, restarts, and several instances never duplicate it.
   - A changed agreed date is a new deadline, so it gets its own reminders.
@@ -191,14 +213,16 @@ Both commands read the same `.env` and print the target database name. They refu
 
 ```powershell
 npm.cmd run db:setup -- --confirm-db jarctech_ticket_dev
-npm.cmd run developer:bootstrap -- --email <work-email-of-someone-who-has-signed-in> --confirm-db jarctech_ticket_dev
+npm.cmd run admin:bootstrap -- --email <work-email-of-someone-who-has-signed-in> --object-id <their-entra-object-id> --confirm-db jarctech_ticket_dev
+npm.cmd run db:migrate-request-types -- --confirm-db jarctech_ticket_dev --dry-run
 ```
 
 - **`db:setup`** creates the sign-in (`users`, `sessions`, `events`), My workspace, reminder, email outbox, and beta collections with validators and indexes. It creates no users and is safe to re-run. Until it has run, `/readyz` reports `schema-missing`; the server itself never creates collections.
-- **`developer:bootstrap`** makes the first Developer. **Nobody ever gains a role by signing in**, including the first person.
-  - The person signs in once (under `tenant-members` they start as a Requestor). The command then promotes that active, signed-in account. The privilege is bound to the account's permanent Microsoft object ID: the email only finds the account, and the change applies only if it still has the same identity. Add `--object-id <id>` to require an exact identity. It applies at once and is recorded in the audit log.
-  - Under `invite-only`, where nobody can sign in uninvited, `--invite` creates one Developer invitation, bound to the person's Microsoft identity at their first sign-in.
-  - It always refuses once an active Developer exists. Everyone else is invited and managed from the **Users** screen by a Developer.
+- **`admin:bootstrap`** makes the first Admin. **Nobody ever gains a role by signing in**, including the first person.
+  - The person signs in once (under `tenant-members` they start as a Requestor). The command then promotes that active, signed-in account. The privilege is bound to the account's permanent Microsoft identity: the email only finds the account, `--object-id` must match the identity stored for it, and the change applies only if the account still has that identity, role, and status. `--from <role>` also requires the current role (for example `--from Developer` when moving an owner from the earlier role model). Only the role changes: the account id, identity, sessions, records, and ownership are kept. It applies at once and is recorded in the audit log.
+  - Under `invite-only`, where nobody can sign in uninvited, `--invite` creates one Admin invitation, bound to the person's Microsoft identity at their first sign-in.
+  - It always refuses once an active Admin exists. Everyone else is invited and managed from the **Users** screen by an Admin.
+- **`db:migrate-request-types`** (versioned `2026-10-request-type-v1`) gives existing requests in My workspace and the beta simulation an explicit request type: Project when a project is linked, otherwise Ticket. It keeps every id, history entry, and field, adds one activity note per record, and bumps the record version. `--dry-run` only counts; running it again changes nothing new; `--revert` removes only the types it set that nobody has changed since. Each run is audited.
 
 Then start with `npm.cmd start` and open http://localhost:4177. You'll see the sign-in page.
 
@@ -272,8 +296,9 @@ An explicit beta capability for signed-in mode, off unless `BETA_SIMULATION=enab
 
 **Simulated views:**
 - **Switching:** the header's **Simulation view** switches freely between **Requestor**, **Admin**, and **Developer**, and the choice is remembered in the browser.
-- **Who each view acts as:** the Developer view acts as the sample developer **Miguel Santos**. Assignments use only the sample developers (Miguel Santos, Elyza Cruz, Paolo Reyes). No real developer accounts are needed.
-- **Requestor view:** shows the member's own requests plus the shared sample requests, and requestor actions apply only to those.
+- **Who each view acts as:** each view is a fictional test identity, so switching views shows independent confirmations. The **Admin** view is **Alex Admin**: every record, review, assignment (to a sample developer or to itself), scope-change approval, and closure. The **Developer** view is the sample developer **Miguel Santos**: only the work assigned to him. Sample developers are Miguel Santos, Elyza Cruz, and Paolo Reyes; no real accounts are needed.
+- **Requestor view:** shows the member's own requests plus the shared sample requests, and requestor actions (including meeting, agreement, and completion confirmations) apply only to those.
+- **Same rules as My workspace:** the simulation runs the same request types, locked agreements, evidence, dual confirmation, and closure gate, checked on the server per view (lists, search, details, and actions).
 
 **Server rules:**
 - **Every action is authorized on the server:** sign-in, the app's own origin, a valid view, and the workflow rules for that view and the record's current status (shared with the browser in `public/workflow-core.js`).
@@ -324,7 +349,7 @@ npm.cmd run beta:seed -- --confirm-db <database> --replace    # replaces only th
 
 **Limitations:**
 - The beta workspace is test data, and any signed-in beta member can act in any view and reset it.
-- Real Admin and Developer roles and real ticket ownership are not yet used for tickets.
+- Attachment downloads in the simulation follow the shared test data (any beta member), not the simulated view.
 - Email and calendar are not connected; notifications are in-app only.
 - Attachments are not scanned for malware. A file already on a ticket can't be removed individually; a beta reset removes all beta files.
 - The workspace still loads every beta record at once for the dashboard counts and details. Only the lists are searched and paged on the server.
@@ -348,10 +373,10 @@ An explicit beta option for signed-in mode, off unless `INSPECTION_MODE=enabled`
 
 1. Requestor submission and progress
 2. Admin review, clarification, rejection, priority, and assignment
-3. Developer meetings and confirmation
-4. Two-step project creation and date validation
+3. Developer requirements meeting and the locked agreement
+4. Two-step project timeline and date validation
 5. Gantt editing, progress, and reload persistence
-6. Testing, acceptance, corrections, release, and closure
+6. Evidence, dual confirmation, corrections, release, and closure
 7. The linked change lifecycle, including rejection
 8. Search, filters, notifications, and dialog controls
 9. Sign-in, logout, sample-data recovery and reset, exit, the privilege boundary, and normal-record isolation
@@ -366,7 +391,7 @@ It never contacts Microsoft or Atlas and never reads `.env`. Ports are chosen au
 - the pre-filled, read-only Requestor name
 - that a Requestor cannot use the admin API
 - sign-out
-- the Developer Users screen: invite, revoke, and role change; the sign-in card centered on desktop and phone
+- the Admin Users screen: invite, revoke, and role change; the sign-in card centered on desktop and phone
 - a second scenario with `ACCESS_POLICY=tenant-members` (beta): a member joins as Requestor, Admin claims are ignored, guests, personal accounts, other tenants and disabled members are refused, an invited Developer keeps the role, and the Users screen explains the policy
 
 Ports are chosen automatically. It uses a temporary browser profile and cleans up after success, failure, or Ctrl+C. Set `AUTH_CHECK_SCREENSHOTS` to a folder (for example `tmp/auth`) to save screenshots. It is not part of `npm test` or GitHub Actions.
@@ -408,13 +433,14 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `server/auth/oidc.cjs` | Microsoft Entra OpenID Connect (code flow with PKCE, state, nonce, and ID token signature checks) via `openid-client` |
 | `server/auth/store.cjs` | Admission rules, invitations, role changes, server-side sessions, and the audit log |
 | `server/auth/pages.cjs`, `server/auth/tokens.cjs` | Sign-in, access-denied, signed-out, and error pages; random tokens and the encrypted sign-in flow cookie |
-| `public/auth-client.js` | Signed-in mode only: header name and role, Sign out, the Developer Users screen, and the inspection controls and banner |
+| `public/auth-client.js` | Signed-in mode only: header name and role, Sign out, the Admin Users screen, and the inspection controls and banner |
+| `public/completion.js` | Ticket details: requirements agreement (versions, confirmations), completion evidence, the two completion confirmations, corrections, and the closure gate |
 | `public/inspection.js` | Beta inspection mode (sent only when `INSPECTION_MODE=enabled`): preview view, isolated sample-data storage, exit, and reset |
 | `public/workflow-core.js` | Ticket, project, and linked-change workflow rules (view and status checks), shared by the browser and the server |
 | `public/sample-data.js` | Sample records (local demo, inspection, and the beta workspace seed) and their illustrative dated schedule |
 | `public/workspace-store.js` | Signed-in workspace client (My workspace, or the beta simulation chosen in the Workspace switch): loading, saving, conflicts, failed saves, refresh, search, uploads, and reset |
 | `server/workspace/engine.cjs` | Shared ticket workspace engine: versioned writes, repeated-submission protection, capacities, search, and not-found for anything a member may not see |
-| `server/work/index.cjs` | My workspace policy (`/api/v1/work/*`): visibility and capacities from the account's role and ownership; active Admin and Developer assignees |
+| `server/work/index.cjs` | My workspace policy (`/api/v1/work/*`): visibility and capacities from the account's role, assignment, and ownership; active Developers (and the Admin themselves) as assignees |
 | `server/beta/index.cjs` | Beta simulation policy (`/api/v1/beta/*`): simulated views on shared test data, seed, and reset |
 | `server/workspace/attachments.cjs`, `public/attachment-rules.js` | Attachments: GridFS storage per workspace, content checks, safe downloads that follow ticket access, abandoned-upload cleanup; shared limits and safe names |
 | `server/workspace/notifications.cjs` | In-app notifications and reminders: account inboxes (My workspace) or simulated inboxes (beta), per-member read state, duplicate prevention |

@@ -60,11 +60,11 @@ test('missing records start from sample data as a new demo', () => {
   assert.equal(storage.length, 0, 'loading alone does not write');
 });
 
-test('role filtering: Admin and Developer (staff) see all, requestor sees own', () => {
+test('role filtering: Admin sees all, Developer sees assigned work, requestor sees own', () => {
   const { tickets } = existing();
   const ids = role => TC.visibleTickets(tickets, role).map(t => t.id);
   assert.deepEqual(ids('Admin'), ['JRC-1042', 'JRC-1043', 'JRC-1044']);
-  assert.deepEqual(ids('Developer'), ['JRC-1042', 'JRC-1043', 'JRC-1044']);
+  assert.deepEqual(ids('Developer'), tickets.filter(t => t.dev === TC.DEMO_DEVELOPER).map(t => t.id));
   assert.deepEqual(ids('Requestor'), ['JRC-1042', 'JRC-1044']);
 });
 

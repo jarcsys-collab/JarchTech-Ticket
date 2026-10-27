@@ -20,6 +20,40 @@ function wireAttention() {
     listPage = 1; render();
   });
 }
+// Admin overview: Tickets and Projects by stage, plus overdue work. Each count opens the matching records below.
+const STAGE_HINTS = {
+  new: 'Not yet assigned to a worker',
+  active: 'Assigned; planning, meeting, agreement, or on hold',
+  'awaiting-worker': 'In progress, or a Project awaiting its release or handover',
+  'awaiting-requestor': 'Worker marked done; Requestor to review the evidence',
+  ready: 'Both confirmations recorded: close it',
+  closed: 'Closed after both confirmations'
+};
+function adminOverview(items) {
+  const today = deadlineCtx();
+  const count = (type, test) => items.filter(t => (!type || WorkflowCore.typeOf(t) === type) && test(t)).length;
+  const overdue = t => { const d = DeadlineCore.deadline(t, today.today, today.settings); return Boolean(d && d.state === 'overdue'); };
+  const cell = (type, stage, n, label) => `<button type="button" class="overview-count${n ? '' : ' zero'}" data-overview-stage="${stage}" data-overview-type="${type}" aria-pressed="${filters.stage === stage && filters.type === type || (stage === 'overdue' && filters.attention === 'Overdue' && filters.type === type)}" aria-label="${esc(label)}: ${n} ${type ? type + 's' : 'requests'}">${n}</button>`;
+  const rows = [...WorkflowCore.STAGES.map(([key, label]) => [key, label, t => WorkflowCore.stageOf(t) === key]), ['overdue', 'Overdue (any stage)', overdue]];
+  return `<section class="overview" aria-labelledby="overview-title"><div class="overview-head"><h2 id="overview-title">Admin overview</h2><span class="read-only">Choose a number to see those records. Overdue uses the agreed delivery dates.</span></div><div class="table-wrap"><table class="overview-table"><thead><tr><th>STAGE</th><th>TICKETS</th><th>PROJECTS</th><th>ALL</th></tr></thead><tbody>${rows.map(([key, label, test]) => `<tr class="${key === 'ready' ? 'ready' : key === 'overdue' ? 'overdue-row' : ''}"><td><b>${esc(label)}</b><small>${esc(STAGE_HINTS[key] || 'Agreed delivery date has passed')}</small></td><td>${cell('Ticket', key, count('Ticket', test), label)}</td><td>${cell('Project', key, count('Project', test), label)}</td><td>${cell('', key, count('', test), label)}</td></tr>`).join('')}</tbody></table></div></section>`;
+}
+function wireOverview() {
+  document.querySelectorAll('[data-overview-stage]').forEach(b => b.onclick = () => {
+    const stage = b.dataset.overviewStage, type = b.dataset.overviewType;
+    resetListFilters();
+    if (stage === 'overdue') filters.attention = 'Overdue'; else filters.stage = stage;
+    filters.type = type;
+    view = 'Tickets';
+    render();
+    $('#records')?.scrollIntoView({ block: 'start' });
+  });
+}
+const confirmations = t => {
+  const c = WorkflowCore.completionOf(t);
+  const mark = (label, x) => `<span class="conf ${x ? 'yes' : 'no'}" title="${esc(label)}: ${x ? 'confirmed by ' + esc(x.name) : 'pending'}">${x ? '✓' : '○'} ${label}</span>`;
+  return `${mark('Worker', c.worker)}${mark('Requestor', c.requestor)}`;
+};
+
 function filterBar() {
   const select = (key, all, label, values) => `<select id="${key}-filter" data-filter="${key}" aria-label="Filter by ${label}"><option value="">${all}</option>${values.map(v => { const [value, text] = Array.isArray(v) ? v : [v, v]; return `<option value="${esc(value)}" ${filters[key] === value ? 'selected' : ''}>${esc(text)}</option>`; }).join('')}</select>`;
   // My workspace filters by assignee account (Admin or Developer); the simulation and local modes by sample name.
@@ -28,8 +62,10 @@ function filterBar() {
     + select('status', 'All statuses', 'status', ListFilter.CHOICES.status)
     + select('priority', 'All priorities', 'priority', ListFilter.CHOICES.priority)
     + select('department', 'All departments', 'department', ListFilter.CHOICES.department)
-    // The Developer view only lists the sample developer's own work, so a developer filter would not apply.
-    + (role === 'Requestor' && accounts ? '' : select('dev', 'All assignees', accounts ? 'assignee' : 'assigned sample developer', devValues))
+    + select('type', 'Tickets and Projects', 'request type', ListFilter.CHOICES.type)
+    + select('stage', 'Any stage', 'overview stage', WorkflowCore.STAGES)
+    // Only Admins see everyone's work, so only they get an assignee filter.
+    + (role === 'Admin' ? select('dev', 'All assignees', 'assignee', devValues) : '')
     + select('attention', 'Any deadline', 'deadline or decision', ListFilter.CHOICES.attention)
     + `<button type="button" class="secondary" id="clear-filters" ${ListFilter.activeCount(filters) ? '' : 'disabled'}>Clear filters</button>`;
 }
@@ -93,7 +129,7 @@ function showList(r) {
       : '<div class="empty">No records here yet. New work will appear as you move through the workflow.</div>';
     if ($('#empty-clear')) $('#empty-clear').onclick = () => { resetListFilters(); render(); $('.search').focus(); };
   } else {
-    el.innerHTML = `<div class="group-title">⌄ &nbsp; ${view === 'Projects' ? 'Projects' : canAdmin() ? 'All requestor tickets' : 'My ticket'} <small>${total} records</small></div><div class="table-wrap"><table><thead><tr><th>${view === 'Projects' ? 'PROJECT / REQUEST' : 'REQUEST'}</th><th>STATUS</th><th>PRIORITY</th><th>ASSIGNEE</th><th>DELIVERY DATE</th><th>PROGRESS</th></tr></thead><tbody>${items.map(t => `<tr data-id="${esc(t.id)}" tabindex="0"><td><span class="ticket-name">${esc(view === 'Projects' ? (t.projectName || t.title) : t.title)}</span><span class="ticket-id">${view === 'Projects' ? esc(t.project) + ' · ' : ''}${esc(t.id)} &nbsp; · &nbsp; ${esc(t.department)}</span></td><td>${pill(t.status)}</td><td>${pill(t.priority)}</td><td>${person(t.dev)}</td><td>${DeadlineCore.dueDate(t) ? dueText(t) : `<span class="requested">Requested ${esc(DeadlineCore.formatDate(DeadlineCore.requestedDate(t)))}</span>`}</td><td>${prog(t)}</td></tr>`).join('')}</tbody></table></div>`;
+    el.innerHTML = `<div class="group-title">⌄ &nbsp; ${view === 'Projects' ? 'Projects' : listTitle()} <small>${total} records</small></div><div class="table-wrap"><table><thead><tr><th>${view === 'Projects' ? 'PROJECT / REQUEST' : 'REQUEST'}</th><th>TYPE</th><th>STATUS</th><th>PRIORITY</th><th>ASSIGNEE</th><th>DELIVERY DATE</th><th>CONFIRMATIONS</th><th>PROGRESS</th></tr></thead><tbody>${items.map(t => `<tr data-id="${esc(t.id)}" tabindex="0"><td><span class="ticket-name">${esc(view === 'Projects' ? (t.projectName || t.title) : t.title)}</span><span class="ticket-id">${view === 'Projects' ? esc(t.project) + ' · ' : ''}${esc(t.id)} &nbsp; · &nbsp; ${esc(t.department)}</span></td><td>${typePill(WorkflowCore.typeOf(t))}</td><td>${pill(t.status)}</td><td>${pill(t.priority)}</td><td>${person(t.dev)}</td><td>${DeadlineCore.dueDate(t) ? dueText(t) : `<span class="requested">Requested ${esc(DeadlineCore.formatDate(DeadlineCore.requestedDate(t)))}</span>`}</td><td class="conf-cell">${confirmations(t)}</td><td>${prog(t)}</td></tr>`).join('')}</tbody></table></div>`;
     el.querySelectorAll('[data-id]').forEach(x => {
       const openRecord = () => view === 'Projects' ? projectView(x.dataset.id) : detail(x.dataset.id);
       x.onclick = openRecord;

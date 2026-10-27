@@ -2,8 +2,9 @@
    and the beta simulation. The server adds this script last in signed-in mode; it does nothing during local
    inspection. Uses the app.js and projects.js globals (shared, simulated, state, role, detail, projectView,
    changeDetail, open, toast) and window.JARC_SERVER.
-   My workspace notifications go to your account (and the Admin inbox for Admins). The simulation uses simulated role
-   and sample-developer inboxes. Read state is per signed-in member.
+   My workspace notifications go to your account (and the shared Admin inbox for Admins). The simulation uses simulated
+   role and test-identity inboxes. Read state is per signed-in member. Completion evidence (completion.js) can also
+   carry files, uploaded here like comment attachments.
    The unread count refreshes after saves, when the tab becomes visible, when the view changes, and every
    POLL_MS while the tab is visible. */
 (function () {
@@ -169,7 +170,7 @@
     };
   };
 
-  // Ticket details: an attachments summary, and attachments on comments (a comment can be files only).
+  // Ticket details: an attachments summary, attachments on comments (a comment can be files only), and evidence files.
   const baseDetail = detail;
   detail = function (id) {
     baseDetail(id);
@@ -191,5 +192,20 @@
       if (!text.value.trim() && !files.ids().length) { text.focus(); return toast('Write a comment or attach a file.'); }
       perform('ticket', id, 'comment', { comment: text.value, attachments: files.ids() }, () => refresh(id));
     };
+    // Evidence: files and links together. The server accepts only your own uploads as evidence files.
+    const evidence = $('#evidence-form');
+    if (evidence) {
+      const proof = uploader(evidence, evidence.querySelector('.actions'));
+      evidence.querySelector('.uploader label').textContent = 'Evidence files';
+      evidence.onsubmit = e => {
+        e.preventDefault();
+        if (proof.busy()) return toast('Wait for the uploads to finish, or remove them.');
+        const f = new FormData(evidence);
+        const links = [0, 1].map(n => ({ label: String(f.get('label' + n) || '').trim(), url: String(f.get('url' + n) || '').trim() })).filter(l => l.url);
+        if (links.some(l => !WorkflowCore.safeUrl(l.url))) return toast('Links must be complete http:// or https:// addresses.');
+        if (!links.length && !proof.ids().length) return toast('Attach a file or add a deliverable link.');
+        perform('ticket', id, 'add-evidence', { links, attachments: proof.ids() }, () => refresh(id));
+      };
+    }
   };
 })();

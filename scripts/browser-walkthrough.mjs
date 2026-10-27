@@ -234,7 +234,7 @@ try {
   check('A2 navigation is Tickets + Projects only', await w(`JSON.stringify([...document.querySelectorAll('#nav button')].map(b=>b.textContent.replace(/[0-9▤▦]/g,'').trim()))==='["Tickets received","Projects"]'`));
   check('A3 sample project tasks carry illustrative demo dates', await w(`__w.ticket('JRC-1042').tasks.every(t=>t.scheduleSource==='demo'&&t.start)`));
 
-  await w(`__w.role('Requestor');__w.click('#new-ticket');__w.set('[name=title]','Walkthrough request');__w.set('[name=date]','2026-12-15');__w.set('[name=description]','Need a walkthrough feature.');__w.set('[name=criteria]','Walkthrough passes.');__w.submit('#request-form');true`);
+  await w(`__w.role('Requestor');__w.click('#new-ticket');__w.set('[name=title]','Walkthrough request');__w.set('[name=type]','Project');__w.set('[name=date]','2026-12-15');__w.set('[name=description]','Need a walkthrough feature.');__w.set('[name=criteria]','Walkthrough passes.');__w.submit('#request-form');true`);
   check('A4 requestor submits ticket JRC-1043', await w(`__w.toast().includes('JRC-1043') && __w.ticket('JRC-1043').status==='Submitted'`), await w(`__w.toast()`));
   check('A5 requestor list shows own tickets only', await w(`document.querySelectorAll('#records [data-id]').length===__w.store().tickets.filter(t=>t.name==='Adriane Venzon').length`));
 
@@ -245,10 +245,13 @@ try {
   check('A7 developer schedules planning meeting in ticket details', await w(`__w.ticket('JRC-1043').status==='Meeting scheduled'`));
   await w(`__w.role('Requestor');__w.click('[data-id="JRC-1043"]');__w.click('#confirm-meeting');true`);
   check('A8 requestor confirms meeting', await w(`__w.ticket('JRC-1043').meetingConfirmed===true`));
+  await w(`__w.role('Developer');__w.click('[data-id="JRC-1043"]');__w.click('#record-agreement');__w.set('#agreement-form [name=notes]','Met.');__w.set('#agreement-form [name=requirements]','Build walkthrough.');__w.set('#agreement-form [name=criteria]','All checks pass.');__w.submit('#agreement-form');true`);
+  await w(`__w.click('#confirm-agreement');__w.role('Requestor');__w.click('[data-id="JRC-1043"]');__w.click('#confirm-agreement');true`);
+  check('A8b worker and requestor confirm the agreement, which locks it', await w(`__w.ticket('JRC-1043').agreements.length===1 && __w.ticket('JRC-1043').agreements[0].worker.name==='Miguel Santos'`));
 
   await w(`__w.role('Developer');__w.click('[data-id="JRC-1043"]');__w.click('#create-project');true`);
-  check('A9 step 1 of 2 shows scope form', await w(`document.querySelector('.tagline').textContent.includes('STEP 1 OF 2')`));
-  await w(`__w.set('#project-scope [name=projectName]','Walkthrough project');__w.set('#project-scope [name=requirements]','Build walkthrough.');__w.set('#project-scope [name=criteria]','All checks pass.');__w.set('#project-scope [name=date]','2026-12-15');__w.submit('#project-scope');true`);
+  check('A9 step 1 of 2 shows the project form with the locked agreement', await w(`document.querySelector('.tagline').textContent.includes('STEP 1 OF 2') && document.querySelector('#dialog-content').textContent.includes('Build walkthrough.')`));
+  await w(`__w.set('#project-scope [name=projectName]','Walkthrough project');__w.set('#project-scope [name=date]','2026-12-15');__w.submit('#project-scope');true`);
   check('A10 step 2 of 2 shows task timeline form', await w(`document.querySelector('.tagline').textContent.includes('STEP 2 OF 2')`));
   const fillTask = (i, t, s, e) => `{let f=document.querySelectorAll('.plan-task')[${i}];__w.set('[name=title]','${t}',f);__w.set('[name=requirement]','Req ${t}',f);__w.set('[name=criteria]','Crit ${t}',f);__w.set('[name=start]','${s}',f);__w.set('[name=end]','${e}',f);}`;
   await w(`${fillTask(0, 'Build', '2026-11-10', '2026-11-05')};__w.set('[name=agreed]',true);__w.submit('#project-tasks');true`);
@@ -271,15 +274,15 @@ try {
   await w(`__w.click('[data-project-task="1"]');true`);
   check('A17 requestor task detail is read-only', await w(`[...document.querySelectorAll('#dated-task-form input,#dated-task-form textarea,#dated-task-form select')].every(x=>x.disabled) && !document.querySelector('#dated-task-form .primary')`));
 
-  await w(`__w.role('Developer');__w.click('[data-id="JRC-1043"]');__w.click('#testing');true`);
-  check('A18 cannot submit for acceptance with open tasks', await w(`__w.ticket('JRC-1043').status==='Planning' && __w.toast().includes('Complete all')`));
-  await w(`__w.click('[data-task="1"]');true`);
-  await w(`__w.click('#testing');__w.set('#test-form [name=summary]','Tested on staging.');__w.set('#test-form input[type=checkbox]',true);__w.submit('#test-form');true`);
-  check('A19 developer submits for acceptance', await w(`__w.ticket('JRC-1043').status==='Awaiting acceptance'`));
+  await w(`__w.role('Developer');__w.click('[data-id="JRC-1043"]');__w.click('[data-action="In progress"]');__w.click('#worker-complete');true`);
+  check('A18 cannot mark work done with open tasks', await w(`__w.ticket('JRC-1043').status==='In progress' && __w.toast().includes('Complete all')`));
+  await w(`__w.click('[data-task="1"]');__w.set('#evidence-form [name=url0]','https://example.com/staging');__w.submit('#evidence-form');true`);
+  await w(`__w.click('#worker-complete');__w.set('#complete-form [name=summary]','Tested on staging.');__w.set('#complete-form input[type=checkbox]',true);__w.submit('#complete-form');true`);
+  check('A19 developer adds evidence and marks the work done', await w(`__w.ticket('JRC-1043').status==='Awaiting acceptance' && __w.ticket('JRC-1043').evidence.length===1`));
   check('A20 linked change entry stays inside ticket details', await w(`!!document.querySelector('#new-change')`));
 
-  await w(`__w.role('Requestor');__w.click('[data-id="JRC-1043"]');__w.click('[data-action="Ready for release"]');true`);
-  check('A21 requestor accepts delivery', await w(`__w.ticket('JRC-1043').status==='Ready for release'`));
+  await w(`__w.role('Requestor');__w.click('[data-id="JRC-1043"]');__w.click('#requestor-confirm');true`);
+  check('A21 requestor confirms completion independently', await w(`__w.ticket('JRC-1043').status==='Ready for release' && !!__w.ticket('JRC-1043').completion.requestor`));
   await w(`__w.role('Developer');__w.click('[data-id="JRC-1043"]');__w.click('[data-action="Released"]');true`);
   check('A22 developer confirms release', await w(`__w.ticket('JRC-1043').status==='Released'`));
   await w(`__w.role('Admin');__w.click('[data-id="JRC-1043"]');__w.click('[data-action="Closed"]');true`);
