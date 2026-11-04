@@ -33,6 +33,7 @@ Use the URL printed in your terminal. Stop the server with Ctrl+C.
 - Developer: Assigned work shows the work assigned to them (and their own requests): meetings, agreements, timelines, tasks, evidence, and their completion confirmation.
 - Two-step project timeline from the locked agreement: project name and delivery target, then dated tasks.
 - Completion proof and two confirmations: the worker adds evidence (files or links) and marks the work done; the Requestor confirms independently; only then can an Admin close it.
+- Guided next actions: a **Needs your action** home (Admins see separate queues for administrative reviews and their own assigned work), and on every request a next-step panel (the action, who takes it, why, and one primary button), a short progress tracker, the current working section, and the supporting sections one click away. See [Guided next actions](#guided-next-actions).
 - Projects list opens a Gantt chart with task dates, owner, requirement, task criteria, and completion.
 - Linked scope changes remain inside each ticket and retain assessment, agreement, approval, testing, acceptance, release, and closure.
 - Browser-local persistence, sample data, syntax checks, date tests, static server tests, backend foundation tests, and a GitHub Actions check.
@@ -150,6 +151,20 @@ With sign-in on, **My workspace** is the main view. Its tickets, projects, comme
 - **Stale confirmations never close changed work:** returning for correction, the worker withdrawing their completion, reassignment while awaiting confirmation, or an approved scope change clears earlier confirmations. Cleared confirmations and correction reasons stay on the record.
 - **Evidence:** files reuse the attachment storage and permissions (only the uploader's own uploads can become evidence; downloads follow ticket access and are always served as attachments). Links must be plain `http` or `https` addresses without credentials; they are shown as links that open in a new tab and are never fetched by the server.
 - **Older records:** `npm run db:migrate-request-types` classifies existing requests (linked project: Project; otherwise Ticket). Projects created before locked agreements and requests completed before dual confirmation are not given invented confirmations: details list the missing steps, and the worker and Requestor can still record them.
+
+### Guided next actions
+
+Presentation and navigation only; the workflow, permissions, and data are unchanged.
+
+- **Home:** the Tickets page starts with **Needs your action**: the requests and scope changes waiting for you, in queues by capacity (Admins: *Administrative reviews* and *Your assigned work*; Developers: *Your assigned work*; Requestors: *Needs your action*; anyone's own requests that need them). A count of requests waiting on others follows. Notifications (the bell) stay separate: they say what changed, the home says what needs you.
+- **Next-step panel** on every request and scope change: the next action, who takes it (you, or a named person and capacity), a short explanation, and one primary button. Waiting states say who acts next and that nothing is needed from you. **Show me** opens the right section, scrolls to it, and focuses the field or button.
+- **Where the guidance comes from:** `WorkflowCore.nextStep` tries the real workflow actions on a copy of the request, as the responsible party and as you, in workflow order. There is no second set of rules, and every save is still checked on the server.
+- **Request layout:** a summary, the next-step panel, a progress tracker (with states in words, not only color), then the current working section. Everything else (details, meeting, tasks, attachments, linked changes, conversation) is a labelled, collapsed group. Evidence stays in view while the Requestor reviews it, and the requirements while the agreement is confirmed. Projects use the wider two-column page.
+- **Completion and closure** are shown as separate stages (worker completion, Requestor confirmation, the release or handover for Projects, Admin closure), each with who acts, its state, and only its own buttons. The closure gates are unchanged.
+- **Forms:** required fields are marked (also for screen readers), examples are given where useful, and errors appear only after submitting: next to each field and in a summary at the top that links to the fields. Entries are kept.
+- **Updates from another session:** if a save is refused because someone else changed the request, the panel says so, keeps your typed text, and offers **Show the latest version**.
+- **Beta simulation** has amber accents and adds handoff hints ("Simulation: switch to the Requestor view to confirm the agreement", with a switch button). My workspace never suggests switching views.
+- **Keyboard and motion:** focus moves to the next-step heading when a request opens; every control is reachable with Tab; focus outlines are visible; smooth scrolling is turned off when the system asks for reduced motion.
 
 ### Due dates, reminders, and escalation
 
@@ -449,6 +464,8 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `public/list-filter.js`, `public/list-view.js` | Ticket and project list search and filters (shared rules), result count, pages, and empty, loading, and error states |
 | `public/workspace-features.js`, `public/features.css` | Notifications panel and badge, attachment uploader, deadline labels, and the attention summary (signed-in mode) |
 | `scripts/work-walkthrough.mjs` | Real-browser walkthrough of My workspace roles, ownership, assignment, dates, reminders, role changes, and simulation separation (`npm run walkthrough:work`) |
+| `scripts/guide-walkthrough.mjs` | Real-browser walkthrough of guided next actions: home queues, next-step panel, keyboard, Show me, form validation, stages, handoffs, stale updates, mobile, and reduced motion (`npm run walkthrough:guide`; `GUIDE_SCREENSHOTS=<dir>` saves screenshots) |
+| `public/guide.js` | Guided next actions: home queues, next-step panel, progress tracker, request layout, Show me, and guided form validation |
 | `scripts/beta-features-walkthrough.mjs` | Real-browser walkthrough of attachments, notifications, and search with two signed-in contexts (`npm run walkthrough:features`) |
 | `scripts/beta-seed.cjs`, `scripts/beta-walkthrough.mjs` | Explicit beta seed command (`npm run beta:seed`) and the beta real-browser walkthrough (`npm run walkthrough:beta`) |
 | `scripts/inspection-walkthrough.mjs` | Optional per-flow browser walkthrough of every workflow in inspection mode (`npm run walkthrough:inspection`) |

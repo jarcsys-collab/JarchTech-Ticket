@@ -180,8 +180,9 @@
     if (all.length) {
       const section = document.createElement('section');
       section.className = 'ticket-files';
-      section.innerHTML = `<h3>Attachments <small>(${all.length})</small></h3><ul class="file-links">${all.map(f => `<li><a href="${B.base}/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(R.formatSize(f.size))} · ${esc(f.by || '')} · ${esc(f.time)}</small></li>`).join('')}</ul>`;
-      $('.timeline').previousElementSibling.before(section);
+      Object.assign(section.dataset, { section: 'attachments', title: `Attachments (${all.length})` });
+      section.innerHTML = `<ul class="file-links">${all.map(f => `<li><a href="${B.base}/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(R.formatSize(f.size))} · ${esc(f.by || '')} · ${esc(f.time)}</small></li>`).join('')}</ul>`;
+      $('[data-section="activity"]').before(section);
     }
     const text = form.querySelector('textarea');
     text.required = false;
@@ -202,8 +203,7 @@
         if (proof.busy()) return toast('Wait for the uploads to finish, or remove them.');
         const f = new FormData(evidence);
         const links = [0, 1].map(n => ({ label: String(f.get('label' + n) || '').trim(), url: String(f.get('url' + n) || '').trim() })).filter(l => l.url);
-        if (links.some(l => !WorkflowCore.safeUrl(l.url))) return toast('Links must be complete http:// or https:// addresses.');
-        if (!links.length && !proof.ids().length) return toast('Attach a file or add a deliverable link.');
+        if (evidenceProblems(evidence, links, proof.ids().length)) return;
         perform('ticket', id, 'add-evidence', { links, attachments: proof.ids() }, () => refresh(id));
       };
     }

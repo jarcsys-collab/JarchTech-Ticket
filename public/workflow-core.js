@@ -556,7 +556,83 @@
     return out;
   }
 
-  const api = { WorkflowError, VIEWS, STAFF, TYPES, STAGES, SAMPLE_DEVELOPER, SIM_ADMIN, IDENTITIES, DEPARTMENTS, CATEGORIES, PRIORITIES, CHANGE_STATUSES, EARLY, FINAL, COMPLETING, MAX_EVIDENCE, validateProjectTasks, createTicket, ticketAction, createChange, changeAction, simulatedContext, roles, typeOf, agreementOf, completionOf, activeEvidence, bothConfirmed, closable, stageOf, missingSteps, safeUrl };
+  // ---- Guidance: the next step on a request and who takes it ----
+  // Presentation only, and derived from the rules above rather than restating them: each candidate step is tried on a
+  // copy of the record, first with a stand-in for the responsible party (is this step open now?), then with the
+  // caller's own capacities (is it theirs?). The first open step, in workflow order, is the next step. Saving still
+  // goes through ticketAction (in the browser for local modes, and always on the server for signed-in workspaces).
+  const copy = x => JSON.parse(JSON.stringify(x));
+  const quiet = ctx => ({ time: () => '', ...ctx });
+  // True when the action would be accepted. lenient: also when only the form input is missing or invalid.
+  function permits(run, ctx, lenient) {
+    try { run(quiet(ctx)); return true; }
+    catch (err) { if (!(err instanceof WorkflowError)) throw err; return Boolean(lenient) && err.code === 'invalid'; }
+  }
+  const STAND_INS = {
+    admin: () => ({ view: 'Admin', actorFor: () => ({ id: 'guide:admin', name: 'Admin' }), isRequester: () => false, isWorker: () => false, sameParty: () => false, assignee: () => null }),
+    worker: t => ({ view: 'Developer', actorFor: () => ({ id: 'guide:worker', name: t.dev }), isRequester: () => false, isWorker: () => true, sameParty: () => false, owners: [t.dev, ...(t.tasks || []).map(x => x.owner)].filter(Boolean) }),
+    requestor: () => ({ view: 'Requestor', actorFor: () => ({ id: 'guide:requestor', name: 'Requestor' }), isRequester: () => true, isWorker: () => false, sameParty: () => false })
+  };
+  const isProject = t => typeOf(t) === 'Project';
+  // Workflow order. when: which of the steps the rules allow is the one to suggest now (never a permission check).
+  const STEPS = [
+    { key: 'provide-info', party: 'requestor', action: 'status', input: { status: 'Under review' }, when: t => t.status === 'Waiting for information', title: 'Add the requested information', explain: 'An Admin asked for more information. Answer in a comment, then send the request back for review.' },
+    { key: 'review', party: 'admin', action: 'status', input: { status: 'Under review' }, when: t => t.status === 'Submitted', title: 'Review the request', explain: 'Check that it is complete and not a duplicate. Then assign it, ask for more information, or reject it with a reason.' },
+    { key: 'resume', party: 'admin', action: 'status', input: { status: 'Under review' }, when: t => t.status === 'On hold', title: 'Resume the request when it can continue', explain: 'This request is on hold. Resume it for review when the reason no longer applies.' },
+    { key: 'assign', party: 'admin', action: 'assign', lenient: true, when: t => !t.dev, title: 'Assign a worker', explain: 'Choose an active Developer, or assign it to yourself, and set the priority.' },
+    { key: 'schedule-meeting', party: 'worker', action: 'schedule-meeting', input: { meeting: '2030-01-01T10:00', location: 'Room' }, when: t => isProject(t) && !t.meeting, title: 'Schedule the requirements meeting', explain: 'A Project starts with a requirements meeting. Propose a date and place; the Requestor confirms it.' },
+    { key: 'confirm-meeting', party: 'requestor', action: 'confirm-meeting', title: 'Confirm the requirements meeting', explain: 'Check the proposed date and place, then confirm the meeting.' },
+    { key: 'record-agreement', party: 'worker', action: 'record-agreement', input: { notes: 'x', requirements: 'x', criteria: 'x' }, when: t => !t.agreementDraft, title: 'Record the agreement', explain: 'After the meeting, write down the meeting notes, the agreed requirements, and the acceptance criteria. Both sides then confirm them.' },
+    { key: 'confirm-agreement-worker', party: 'worker', group: 'agreement', action: 'confirm-agreement', title: 'Confirm the agreement', explain: 'Check the recorded requirements and acceptance criteria. The agreement locks once you and the Requestor have both confirmed.' },
+    { key: 'confirm-agreement', party: 'requestor', group: 'agreement', action: 'confirm-agreement', title: 'Confirm the agreement', explain: 'Check the agreed requirements and acceptance criteria. Once both sides confirm, they are locked; later changes need an approved scope change.' },
+    { key: 'create-project', party: 'worker', action: 'create-project', lenient: true, title: 'Create the project timeline', explain: 'Plan dated tasks, owners, and a delivery target from the locked agreement.' },
+    { key: 'start', party: 'worker', action: 'status', input: { status: 'In progress' }, title: t => (isProject(t) ? 'Start development' : 'Start the work'), explain: t => (isProject(t) ? 'The agreement and timeline are ready. Start development, then work through the tasks.' : 'A Ticket needs no meeting or project plan. Start the work when you begin.') },
+    { key: 'tasks', party: 'worker', action: 'toggle-task', inputFn: t => ({ index: t.tasks.findIndex(x => !x.done), done: true }), when: t => t.status === 'In progress' && isProject(t) && t.tasks.some(x => !x.done), title: 'Finish the project tasks', explain: t => `${t.tasks.filter(x => !x.done).length} of ${t.tasks.length} tasks are still open. Tick each one off when it is done, including internal testing.` },
+    { key: 'add-evidence', party: 'worker', action: 'add-evidence', input: { links: [{ url: 'https://example.com/' }] }, when: t => !activeEvidence(t).length, title: 'Add completion evidence', explain: 'Attach at least one file or deliverable link that shows the work meets the acceptance criteria.' },
+    { key: 'worker-complete', party: 'worker', action: 'worker-complete', input: { summary: 'x' }, title: 'Mark your work done', explain: 'Summarize what was delivered and tested. The Requestor then reviews your evidence and confirms independently.' },
+    { key: 'requestor-confirm', party: 'requestor', action: 'requestor-confirm', title: 'Review the evidence and confirm completion', explain: 'Check the evidence against the acceptance criteria. Confirm completion, or return it for correction with a reason.' },
+    // Records that reached confirmation before evidence was required: the worker needs the work back to add it.
+    { key: 'legacy-return', party: 'requestor', action: 'reason', input: { status: 'In progress', reason: 'x' }, when: t => COMPLETING.includes(t.status) && !completionOf(t).worker && !activeEvidence(t).length, title: 'Return it so the worker can add evidence', explain: 'This request reached confirmation before evidence was required. Return it to the worker with a short note; they add evidence and mark the work done, then you confirm.' },
+    { key: 'legacy-return-admin', party: 'admin', action: 'reason', input: { status: 'In progress', reason: 'x' }, when: t => COMPLETING.includes(t.status) && !completionOf(t).worker && !activeEvidence(t).length, title: 'Return it so the worker can add evidence', explain: 'This request was released before evidence and confirmations were required. Return it to the worker so both confirmations can be recorded before closure.' },
+    { key: 'close', party: 'admin', action: 'status', input: { status: 'Closed' }, title: 'Close the request', explain: t => `The worker and the Requestor have both confirmed${isProject(t) ? ', and the handover is recorded' : ''}. Close the request.` },
+    { key: 'release', party: 'worker', action: 'status', input: { status: 'Released' }, title: 'Confirm the release or handover', explain: 'Both sides have confirmed. Record the release or handover so an Admin can close the Project.' }
+  ];
+  const CHANGE_STEPS = [
+    { key: 'change-send', party: 'admin', action: 'status', input: { status: 'Assessment' }, title: 'Send the scope change for assessment' },
+    { key: 'change-assess', party: 'worker', action: 'assess', lenient: true, title: 'Assess the scope change' },
+    { key: 'change-agree', party: 'requestor', action: 'agree', title: 'Agree to the revised scope and estimate' },
+    { key: 'change-approve', party: 'admin', action: 'approve', title: 'Approve or reject the scope change' },
+    { key: 'change-start', party: 'worker', action: 'status', input: { status: 'In progress' }, title: 'Start the approved change' },
+    { key: 'change-test', party: 'worker', action: 'submit-test', input: { results: 'x' }, title: 'Submit the change for acceptance' },
+    { key: 'change-accept', party: 'requestor', action: 'status', input: { status: 'Accepted' }, title: 'Accept the change or return it' },
+    { key: 'change-release', party: 'worker', action: 'status', input: { status: 'Released' }, title: 'Release the change' },
+    { key: 'change-close', party: 'admin', action: 'status', input: { status: 'Closed' }, title: 'Close the change' }
+  ];
+  const text$ = (v, t) => (typeof v === 'function' ? v(t) : v);
+  // The caller takes a step only in the capacity it belongs to (the same capacities ticketAction checks).
+  const inCapacity = (party, ctx, t) => { try { const r = roles(ctx, t); return party === 'admin' ? r.admin : party === 'worker' ? r.worker : r.req || r.reviewer; } catch { return false; } };
+  function pick(steps, t, run, contexts) {
+    const open = s => { if (s.when && !s.when(t)) return null; const input = s.inputFn ? s.inputFn(t) : s.input || {}; return permits(ctx => run(s, input, ctx), STAND_INS[s.party](t), s.lenient) ? input : null; };
+    const mineFor = (s, input) => contexts.find(ctx => inCapacity(s.party, ctx, t) && permits(c => run(s, input, c), ctx, s.lenient)) || null;
+    const result = (s, mine) => ({ key: s.key, action: s.action, party: s.party, title: text$(s.title, t), explain: text$(s.explain || '', t), mine: mine ? mine.view : null, independent: s.party === 'requestor' && contexts.some(c => c.sameParty && c.sameParty(t)) });
+    for (const s of steps) {
+      const input = open(s);
+      if (!input) continue;
+      const mine = mineFor(s, input);
+      // Steps in one group can be taken in any order (both agreement confirmations): offer the caller's own one.
+      if (!mine && s.group) for (const other of steps.filter(x => x.group === s.group && x !== s)) { const i = open(other); const m = i && mineFor(other, i); if (m) return result(other, m); }
+      return result(s, mine);
+    }
+    return null;
+  }
+  // The next step on a request: { key, party (admin | worker | requestor), title, explain, mine (the caller's
+  // capacity, or null when someone else acts), independent (the Requestor side needs an independent Admin) }, or null
+  // when nothing is open (closed, rejected, or cancelled). contexts: the caller's capacities, as for ticketAction.
+  const nextStep = (t, contexts = []) => pick(STEPS, t, (s, input, ctx) => ticketAction(copy(t), s.action, input, ctx), contexts);
+  // The next step on a linked scope change (for action lists).
+  const nextChangeStep = (c, t, contexts = []) => pick(CHANGE_STEPS, t, (s, input, ctx) => changeAction(copy(c), copy(t), s.action, input, ctx), contexts);
+
+  const api = { WorkflowError, VIEWS, STAFF, TYPES, STAGES, SAMPLE_DEVELOPER, SIM_ADMIN, IDENTITIES, DEPARTMENTS, CATEGORIES, PRIORITIES, CHANGE_STATUSES, EARLY, FINAL, COMPLETING, MAX_EVIDENCE, validateProjectTasks, createTicket, ticketAction, createChange, changeAction, simulatedContext, roles, typeOf, agreementOf, completionOf, activeEvidence, bothConfirmed, closable, stageOf, missingSteps, safeUrl, nextStep, nextChangeStep };
   if (typeof module !== 'undefined') module.exports = api;
   else root.WorkflowCore = api;
 })(typeof window !== 'undefined' ? window : globalThis);

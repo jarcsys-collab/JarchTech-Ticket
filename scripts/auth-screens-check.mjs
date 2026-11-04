@@ -152,6 +152,7 @@ try {
     await js(`localStorage.setItem('jarc-inspection-view', 'Admin'); localStorage.setItem('jarc-inspection:jarc-helpdesk-v1', '{"tickets":[],"changes":[],"notices":[]}'); true`);
     entra.signInNext(account(2, 'Rita Requestor', 'rita@jarc.example'));
     await clickAndLoad('a.primary');
+    for (let i = 0; i < 80 && !(await js(`!!(window.JARC_SERVER && JARC_SERVER.ready && document.querySelector('.record-count'))`)); i++) await sleep(100);
     check('invited Requestor lands in the app', await here() === '/' && await js(`!!document.querySelector('#app .stats')`));
     check('with INSPECTION_MODE off, a remembered inspection view is ignored (no banner, no Preview views, My workspace, real role)', await js(`typeof window.JARC_INSPECTION==='undefined' && !document.querySelector('#inspection-banner') && !document.querySelector('#preview-views') && !document.querySelector('[data-id="JRC-7001"]') && document.querySelector('.sidebar-bottom').textContent.includes('My workspace') && document.querySelector('#page-title').textContent==='My ticket'`));
     check('demo role selector is hidden; header shows name, role, and Sign out', await js(`document.querySelector('.demo-role-label').hidden && document.querySelector('.signed-in-as').textContent==='Rita Requestor · Requestor' && !!document.querySelector('#sign-out') && !document.querySelector('#manage-users')`));
@@ -229,7 +230,7 @@ try {
 
     check('no page errors', errors.length === 0, errors.join(' | '));
   } catch (err) {
-    if (!interrupted) check('check crashed', false, err.stack);
+    if (!interrupted) check('check crashed', false, `${err.stack}${errors.length ? ` | page errors: ${errors.join(' | ')}` : ''}`);
   }
 } catch (err) {
   if (!interrupted) { console.error(`Auth screen check could not start: ${err.message}`); await cleanup(); process.exit(2); }

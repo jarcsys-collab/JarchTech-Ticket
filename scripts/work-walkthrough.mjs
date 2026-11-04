@@ -172,6 +172,11 @@ try {
     await reload(P1);
     check('the Admin sees every request and an unread Admin notification for the new one', await P1.w(`!!document.querySelector('[data-id="${ticketId}"]') && Number(document.querySelector('#notice-count').textContent)>=1`));
 
+    check('the Admin home separates administrative reviews from their own assigned work', await P1.w(`[...document.querySelectorAll('.queue h3')].map(h=>h.firstChild.textContent.trim()).join('|')==='Administrative reviews|Your assigned work' && [...document.querySelectorAll('.queue')[0].querySelectorAll('.queue-item')].some(b=>b.dataset.openTicket==='${ticketId}')`));
+    await P1.do(`document.querySelector('.home [data-open-ticket="${ticketId}"]').click()`);
+    check('real accounts get the next step with no simulation advice', await P1.w(`document.querySelector('#ns-title').textContent==='Review the request' && document.querySelector('#next-step').classList.contains('mine') && !document.querySelector('.ns-handoff') && !document.querySelector('[data-switch-view]')`));
+    await P1.w(`__w.esc();true`);
+
     section = 'assignment';
     await signIn(P2, 3, 'Dana Developer');
     await reload(P2);
@@ -226,6 +231,7 @@ try {
     await sleep(800); await P2.settle(); await waitFor(P2, `!!window.JARC_SERVER && JARC_SERVER.ready`);
     check('switching to Beta simulation shows the beta banner and the Simulation view selector', await P2.w(`!!document.querySelector('#beta-banner') && !document.querySelector('.demo-role-label').hidden && JARC_SERVER.simulated`));
     await P2.do(`__w.view('Admin')`);
+    await waitFor(P2, `JARC_SERVER.view==='Admin' && !!document.querySelector('[data-id="JRC-1042"]')`);
     check('the simulated Admin view shows only beta test records', await P2.w(`!document.querySelector('[data-id="${ticketId}"]') && !document.querySelector('[data-id="${adminTicket}"]') && !!document.querySelector('[data-id="JRC-1042"]')`));
     check('a simulated Admin view gives no user management and changes no real role', (await api(P2, 'GET', '/api/v1/users')).status === 403 && !await P2.w(`!!document.querySelector('#manage-users')`) && (await users.findOne({ email: 'member3@jarc.example' })).role === 'Developer');
     await P2.w(`__w.set('#workspace-switch','mine');true`);

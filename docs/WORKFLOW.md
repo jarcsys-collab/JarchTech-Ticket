@@ -41,6 +41,10 @@ New or changed requirements -> linked change -> Admin review -> worker impact as
 
 Changes are accessible through the original request's Linked change requests section, not a sidebar tab. Fixes to agreed requirements stay on the original request as corrections. A closed original need not be reopened for a separately tracked change.
 
+## Guidance
+
+The app shows each person the next step on a request and who takes it (see README, Guided next actions). The guidance is derived from the same workflow rules by trying the actions, so it cannot disagree with them; the server checks every action again.
+
 ## Older records
 
 `npm run db:migrate-request-types` classifies existing requests (linked project: Project; otherwise Ticket), versioned and reversible. Projects from before locked agreements and requests completed before dual confirmation get no invented meetings, approvals, or confirmations: ticket details list the missing steps, and the worker and Requestor can still record them.

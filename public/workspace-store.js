@@ -103,7 +103,12 @@
       if (res.ok) { setSaveStatus(SAVED, 'saved'); setTimeout(() => signal('jarc-workspace-saved')); return res.data; }
       setSaveStatus('Not saved', 'error');
       toast(explain(res));
-      if (res.status === 409) onConflict(res.data);
+      if (res.status === 409) {
+        onConflict(res.data);
+        // Lets the open request say that it changed elsewhere (guide.js), without discarding typed text.
+        const ids = [...(res.data.tickets || []).map(t => t.id), ...(res.data.changes || []).map(c => c.ticket)];
+        window.dispatchEvent(new CustomEvent('jarc-workspace-conflict', { detail: { ids } }));
+      }
       return null;
     } catch {
       setSaveStatus('Not saved', 'error');

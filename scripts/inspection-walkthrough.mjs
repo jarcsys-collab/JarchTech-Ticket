@@ -163,7 +163,7 @@ try {
     check('the Requestor list shows only the requestor\’s own tickets, including the new one', await w(`!!document.querySelector('[data-id="JRC-1043"]') && document.querySelectorAll('#records [data-id]').length===__w.data().tickets.filter(t=>t.name==='Adriane Venzon').length`));
     check('progress is tracked from tasks (JRC-1042 shows 50%)', await w(`document.querySelector('tr[data-id="JRC-1042"]').textContent.includes('50%')`));
     await w(`__w.open('JRC-1042'); true`); await sleep(200);
-    check('ticket detail shows status, milestones, and the shared activity history', await w(`__w.text().includes('Project milestones') && __w.text().includes('Shared conversation') && __w.text().includes('In progress')`));
+    check('ticket detail shows status, milestones, and the shared activity history', await w(`__w.text().includes('Project milestones') && __w.text().includes('Conversation and activity') && __w.text().includes('In progress')`));
     await w(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); true`);
 
     // ---------- 2: Admin review, clarification, rejection, priority, assignment ----------
@@ -241,7 +241,7 @@ try {
     await w(`__w.set('#evidence-form [name=label0]','Test report');__w.set('#evidence-form [name=url0]','https://example.com/report');__w.submit('#evidence-form');true`);
     await w(`__w.click('#worker-complete');__w.set('#complete-form [name=summary]','Tested against criteria.');__w.set('#complete-form input[type=checkbox]',true);__w.submit('#complete-form');true`);
     check('Developer adds evidence and marks the work done', await w(`__w.ticket('JRC-1043').status==='Awaiting acceptance' && __w.ticket('JRC-1043').completion.worker.name==='Miguel Santos'`));
-    await w(`__w.view('Requestor');__w.open('JRC-1043');__w.click('#workflow-panels [data-reason="In progress"]');__w.set('#reason-form [name=reason]','Region totals are wrong.');__w.submit('#reason-form');true`);
+    await w(`__w.view('Requestor');__w.open('JRC-1043');__w.click('[data-section="confirmations"] [data-reason="In progress"]');__w.set('#reason-form [name=reason]','Region totals are wrong.');__w.submit('#reason-form');true`);
     check('Requestor returns a correction: it stays on the original ticket, reopens the last task, and clears the worker confirmation', await w(`(()=>{const t=__w.ticket('JRC-1043');return t.status==='In progress'&&t.tasks[t.tasks.length-1].done===false&&!t.completion.worker&&t.corrections.length===1&&t.history.some(h=>h.text.includes('Region totals'))})()`));
     await w(`__w.view('Developer');__w.open('JRC-1043');__w.click('[data-task="1"]');true`);
     await w(`__w.click('#worker-complete');__w.set('#complete-form [name=summary]','Fixed and retested.');__w.set('#complete-form input[type=checkbox]',true);__w.submit('#complete-form');true`);
