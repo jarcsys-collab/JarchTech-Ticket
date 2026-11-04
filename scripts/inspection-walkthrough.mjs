@@ -90,7 +90,7 @@ const HELPERS = `window.__w={
   el(sel,root=document){const e=root.querySelector(sel);if(!e)throw new Error('missing '+sel);return e},
   set(sel,val,root=document){const e=__w.el(sel,root);if(e.type==='checkbox')e.checked=val;else e.value=val;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))},
   click(sel){__w.el(sel).click()},
-  submit(sel){__w.el(sel).requestSubmit()},
+  submit(sel){if(sel==='#request-form')for(const [n,v] of [['department','SALES'],['category','MONDAY']]){const e=document.querySelector('#request-form [name='+n+']');if(e&&!e.value)__w.set('#request-form [name='+n+']',v)}__w.el(sel).requestSubmit()},
   view(r){__w.set('#demo-role',r)},
   open(id){__w.click('[data-id="'+id+'"]')},
   toast(){return document.querySelector('#toast').textContent},

@@ -66,7 +66,7 @@ async function act(cookie, kind, id, action, view, input = {}) {
   const current = find(await ws(cookie), id);
   return post(`/api/v1/beta/${kind}/${id}/actions`, cookie, { view, version: current.version, action, input });
 }
-const newRequest = (overrides = {}) => ({ title: 'Shared beta request', type: 'Project', name: 'Spoofed Name', department: 'Sales', date: '2026-12-15', category: 'New feature', description: 'Need a shared report.', criteria: 'Report totals match.', ...overrides });
+const newRequest = (overrides = {}) => ({ title: 'Shared beta request', type: 'Project', name: 'Spoofed Name', department: 'SALES', date: '2026-12-15', category: 'MONDAY', description: 'Need a shared report.', criteria: 'Report totals match.', ...overrides });
 
 test('no seeding on startup: the workspace starts empty; the explicit seed adds the samples', async () => {
   A = await signIn(1); B = await signIn(2);
@@ -113,7 +113,7 @@ test('submission: validated, requester taken from the session, repeated submissi
   assert.equal(t.name, 'Member 1', 'requester name comes from the session, not the form');
   assert.deepEqual(t.requester, { id: t.requester.id, name: 'Member 1', sample: false });
   assert.equal(t.history[0].actor, 'Member 1'); assert.equal(t.history[0].view, 'Requestor'); assert.equal(t.status, 'Submitted');
-  assert.equal(t.type, 'Project'); assert.equal(t.category, 'New feature', 'request type and category are separate');
+  assert.equal(t.type, 'Project'); assert.equal(t.category, 'MONDAY', 'request type and category are separate');
   assert.deepEqual(t.completion, { round: 1, worker: null, requestor: null, log: [] });
   const again = await post('/api/v1/beta/tickets', A, { view: 'Requestor', requestId: id, input: newRequest() });
   assert.equal(again.status, 200); assert.equal(again.json.duplicate, true); assert.equal(again.json.created, 'JRC-1043');
@@ -221,7 +221,7 @@ test('Project lifecycle: mandatory meeting, locked agreement, timeline, evidence
 });
 
 test('Ticket lifecycle with Admin self-assignment: no meeting or project, independent Requestor confirmation', async () => {
-  const made = await post('/api/v1/beta/tickets', B, { view: 'Requestor', requestId: requestId(), input: newRequest({ title: 'Reset a printer', type: 'Ticket', category: 'Bug / issue' }) });
+  const made = await post('/api/v1/beta/tickets', B, { view: 'Requestor', requestId: requestId(), input: newRequest({ title: 'Reset a printer', type: 'Ticket', category: 'POWERBI' }) });
   const id = made.json.created;
   const step = async (cookie, action, view, input, expect = 200) => { const r = await act(cookie, 'tickets', id, action, view, input); assert.equal(r.status, expect, `${action} as ${view}: ${r.text}`); return r.json?.tickets?.[0] || r.json; };
   let t = await step(A, 'assign', 'Admin', { dev: 'Alex Admin', priority: 'Low' });

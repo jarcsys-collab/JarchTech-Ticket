@@ -138,8 +138,14 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     const view = policy.creationView(body);
     if (!REQUEST_ID.test(String(body.requestId || ''))) throw new HttpError(400, 'invalid-request-id');
     const raw = body.input || {};
-    if (!WorkflowCore.DEPARTMENTS.includes(raw.department)) throw new WorkflowCore.WorkflowError('invalid', 'Choose a department.');
-    if (!WorkflowCore.CATEGORIES.includes(raw.category)) throw new WorkflowCore.WorkflowError('invalid', 'Choose a request category.');
+    // A repeat of a submission that already succeeded returns that record, whatever the lists offer by now.
+    const earlier = await tickets.findOne({ workspace: WORKSPACE, requestId: body.requestId });
+    if (earlier) {
+      if (earlier.requester.id !== String(actor._id)) throw new HttpError(409, 'request-id-in-use');
+      return { created: earlier.id, duplicate: true, tickets: [toClient(earlier)] };
+    }
+    if (!WorkflowCore.DEPARTMENTS.includes(raw.department)) throw new WorkflowCore.WorkflowError('invalid', 'Select a department from the list.');
+    if (!WorkflowCore.CATEGORIES.includes(raw.category)) throw new WorkflowCore.WorkflowError('invalid', 'Select a request category from the list.');
     if (!WorkflowCore.TYPES.includes(raw.type)) throw new WorkflowCore.WorkflowError('invalid', 'Choose a request type: Ticket or Project.');
     if (TL.day(raw.date) === null) throw new WorkflowCore.WorkflowError('invalid', 'Enter a valid requested target date.');
     if (String(raw.criteria || '').length > 5000) throw new WorkflowCore.WorkflowError('invalid', 'Acceptance criteria is too long (maximum 5000 characters).');
@@ -317,7 +323,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
       const rx = { $regex: ListFilter.escapeRegex(f.q), $options: 'i' };
       and.push({ $or: ['id', 'project', 'title', 'projectName', 'description'].map(k => ({ [k]: rx })) });
     }
-    for (const k of ['status', 'priority', 'department']) if (f[k]) and.push({ [k]: f[k] });
+    for (const k of ['status', 'priority', 'department', 'category']) if (f[k]) and.push({ [k]: f[k] });
     if (f.type) and.push(typeFilter(f.type));
     if (f.stage) and.push(stageFilter(f.stage));
     if (f.dev) and.push(f.dev === ListFilter.UNASSIGNED ? { dev: { $in: ['', null] } } : policy.simulated ? { dev: f.dev } : { devId: f.dev });

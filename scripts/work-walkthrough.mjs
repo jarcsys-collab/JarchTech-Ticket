@@ -77,7 +77,7 @@ const HELPERS = `window.__w={
   el(sel,root=document){const e=root.querySelector(sel);if(!e)throw new Error('missing '+sel);return e},
   set(sel,val,root=document){const e=__w.el(sel,root);if(e.type==='checkbox')e.checked=val;else e.value=val;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))},
   click(sel){__w.el(sel).click()},
-  submit(sel){__w.el(sel).requestSubmit()},
+  submit(sel){if(sel==='#request-form')for(const [n,v] of [['department','SALES'],['category','MONDAY']]){const e=document.querySelector('#request-form [name='+n+']');if(e&&!e.value)__w.set('#request-form [name='+n+']',v)}__w.el(sel).requestSubmit()},
   view(r){__w.set('#demo-role',r)},
   open(id){__w.click('[data-id="'+id+'"]')},
   esc(){for(let i=0;i<2;i++)document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
@@ -159,14 +159,14 @@ try {
     await signIn(P2, 2, 'Rita Requestor');
     await reload(P2);
     await P2.w(`__w.click('#new-ticket');true`);
-    await P2.w(`__w.set('#request-form [name=title]','WORK-WT payroll export');__w.set('#request-form [name=type]','Project');__w.set('#request-form [name=department]','Finance');__w.set('#request-form [name=date]','${DeadlineCore.addDays(today, 30)}');__w.set('#request-form [name=description]','WORK-WT owned by Rita.');true`);
+    await P2.w(`__w.set('#request-form [name=title]','WORK-WT payroll export');__w.set('#request-form [name=type]','Project');__w.set('#request-form [name=department]','FINANCE');__w.set('#request-form [name=date]','${DeadlineCore.addDays(today, 30)}');__w.set('#request-form [name=description]','WORK-WT owned by Rita.');true`);
     check('the request form asks for a request type and a requested target date', await P2.w(`__w.text().includes('Requested target date') && __w.text().includes('Request type')`));
     await P2.do(`__w.submit('#request-form')`);
     ticketId = await P2.w(`fetch('/api/v1/work/search?q=WORK-WT').then(r=>r.json()).then(d=>d.items[0]?.id||'')`);
     check('the request is saved to My workspace, owned by the signed-in person', /^JRC-2\d{3}$/.test(ticketId) && await P2.w(`fetch('/api/v1/work/tickets/${ticketId}').then(r=>r.json()).then(d=>d.tickets[0].name==='Rita Requestor'&&d.tickets[0].type==='Project')`), ticketId);
     await reload(P2);
     check('the list shows the type and the requested date (no agreed delivery yet)', await P2.w(`document.querySelector('[data-id="${ticketId}"]').textContent.includes('Requested') && document.querySelector('[data-id="${ticketId}"]').textContent.includes('Project')`));
-    adminTicket = (await api(P1, 'POST', '/api/v1/work/tickets', { requestId: 'wt-admin-' + Date.now(), input: { title: 'WORK-WT owner own request', type: 'Ticket', department: 'IT', date: today, category: 'Bug / issue', description: 'Admin request.', criteria: '' } })).json.created;
+    adminTicket = (await api(P1, 'POST', '/api/v1/work/tickets', { requestId: 'wt-admin-' + Date.now(), input: { title: 'WORK-WT owner own request', type: 'Ticket', department: 'SYS', date: today, category: 'POWERBI', description: 'Admin request.', criteria: '' } })).json.created;
     await reload(P2);
     check('a Requestor never sees another person\'s ticket: list, search, or direct URL', await P2.w(`!document.querySelector('[data-id="${adminTicket}"]')`) && (await api(P2, 'GET', `/api/v1/work/search?q=${adminTicket}`)).json.total === 0 && (await api(P2, 'GET', `/api/v1/work/tickets/${adminTicket}`)).status === 404);
     await reload(P1);

@@ -199,7 +199,7 @@ async function shot(name) { if (!SHOTS) return; const r = await send('Page.captu
 const HELPERS = `window.__w={
   set(sel,val,root=document){const el=root.querySelector(sel);if(!el)throw new Error('missing '+sel);if(el.type==='checkbox')el.checked=val;else el.value=val;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},
   click(sel){const el=document.querySelector(sel);if(!el)throw new Error('missing '+sel);el.click();},
-  submit(sel){const f=document.querySelector(sel);if(!f)throw new Error('missing '+sel);f.requestSubmit();},
+  submit(sel){const f=document.querySelector(sel);if(!f)throw new Error('missing '+sel);if(sel==='#request-form')for(const [n,v] of [['department','SALES'],['category','MONDAY']]){const e=f.querySelector('[name='+n+']');if(e&&!e.value)__w.set('#request-form [name='+n+']',v)}f.requestSubmit();},
   role(r){__w.set('#demo-role',r);},
   toast(){return document.querySelector('#toast').textContent},
   store(){return JSON.parse(localStorage.getItem('jarc-helpdesk-v1'))},

@@ -67,7 +67,7 @@ async function act(cookie, id, action, view, input = {}) {
 }
 let rid = 0;
 const requestId = () => `features-${++rid}-${Date.now()}`;
-const request = (overrides = {}) => ({ title: 'FEATURETEST request', type: 'Project', department: 'Sales', date: '2026-12-15', category: 'New feature', description: 'Feature test description.', criteria: '', ...overrides });
+const request = (overrides = {}) => ({ title: 'FEATURETEST request', type: 'Project', department: 'SALES', date: '2026-12-15', category: 'MONDAY', description: 'Feature test description.', criteria: '', ...overrides });
 const create = (cookie, input, extra = {}) => post('/api/v1/beta/tickets', cookie, { view: 'Requestor', requestId: requestId(), input: request(input), ...extra });
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('0000000dIHDR-test-image-bytes')]);
 const PDF = Buffer.from('%PDF-1.7\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n');
@@ -315,9 +315,9 @@ test('notifications: change workflow and recipient rules', () => {
 test('search: combined filters, pagination, visibility, and validation over all shared records', async () => {
   const mk = async (cookie, title, extra) => (await create(cookie, { title, ...extra })).json.created;
   const ids = {
-    a1: await mk(A, 'FINDME alpha invoice', { department: 'Finance', description: 'Quarterly invoice export' }),
-    a2: await mk(A, 'FINDME beta report', { department: 'Finance', description: 'Payroll (special) chars [x]' }),
-    b1: await mk(B, 'FINDME gamma access', { department: 'IT', description: 'VPN access for invoice team' })
+    a1: await mk(A, 'FINDME alpha invoice', { department: 'FINANCE', description: 'Quarterly invoice export' }),
+    a2: await mk(A, 'FINDME beta report', { department: 'FINANCE', description: 'Payroll (special) chars [x]' }),
+    b1: await mk(B, 'FINDME gamma access', { department: 'SYS', description: 'VPN access for invoice team' })
   };
   assert.equal((await act(B, ids.a1, 'assign', 'Admin', { dev: 'Elyza Cruz', priority: 'Critical' })).status, 200);
   const s = async q => { const r = await search(B, { view: 'Admin', ...q }); assert.equal(r.status, 200, JSON.stringify(r.json)); return r.json; };
@@ -325,7 +325,7 @@ test('search: combined filters, pagination, visibility, and validation over all 
   assert.deepEqual((await s({ q: 'invoice' })).items.map(t => t.id).sort(), [ids.a1, ids.b1].sort(), 'summary or description');
   assert.deepEqual((await s({ q: ids.a2 })).items.map(t => t.id), [ids.a2], 'by ticket ID');
   assert.deepEqual((await s({ q: '(special) chars [x]' })).items.map(t => t.id), [ids.a2], 'regex characters are literal');
-  assert.deepEqual((await s({ q: 'findme', department: 'Finance', dev: 'Elyza Cruz', priority: 'Critical', status: 'Assigned' })).items.map(t => t.id), [ids.a1], 'combined');
+  assert.deepEqual((await s({ q: 'findme', department: 'FINANCE', dev: 'Elyza Cruz', priority: 'Critical', status: 'Assigned' })).items.map(t => t.id), [ids.a1], 'combined');
   assert.deepEqual((await s({ q: 'findme', dev: 'Unassigned' })).items.map(t => t.id).sort(), [ids.a2, ids.b1].sort());
   const p1 = await s({ q: 'findme', pageSize: 2 }), p2 = await s({ q: 'findme', pageSize: 2, page: 2 });
   assert.equal(p1.total, 3); assert.equal(p1.items.length, 2); assert.equal(p2.items.length, 1);
@@ -343,7 +343,7 @@ test('search: combined filters, pagination, visibility, and validation over all 
   assert.ok(projects.total >= 1 && projects.items.every(t => t.project));
   // Server search agrees with the shared browser filter on the same records.
   const all = (await ws(B)).tickets;
-  for (const f of [{ q: 'invoice' }, { status: 'In progress' }, { department: 'Finance', dev: 'Unassigned' }, { priority: 'High' }, { type: 'Project' }, { type: 'Ticket' }, { stage: 'new' }, { stage: 'active' }, { stage: 'awaiting-worker' }, { stage: 'awaiting-requestor' }, { stage: 'ready' }, { stage: 'closed' }, { type: 'Project', stage: 'awaiting-worker' }]) {
+  for (const f of [{ q: 'invoice' }, { status: 'In progress' }, { department: 'FINANCE', dev: 'Unassigned' }, { priority: 'High' }, { type: 'Project' }, { type: 'Ticket' }, { stage: 'new' }, { stage: 'active' }, { stage: 'awaiting-worker' }, { stage: 'awaiting-requestor' }, { stage: 'ready' }, { stage: 'closed' }, { type: 'Project', stage: 'awaiting-worker' }]) {
     const local = ListFilter.page(all, ListFilter.normalize({ ...f, pageSize: 50 }));
     const remote = await s({ ...f, pageSize: 50 });
     assert.deepEqual(remote.items.map(t => t.id), local.items.map(t => t.id), JSON.stringify(f));

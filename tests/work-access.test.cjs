@@ -67,7 +67,7 @@ const ws = async cookie => (await call(`${W}/workspace`, { cookie })).json;
 const ticketOf = async (cookie, id) => (await call(`${W}/tickets/${id}`, { cookie }));
 let rid = 0;
 const requestId = () => `work-${++rid}-${Date.now()}`;
-const request = (overrides = {}) => ({ title: 'WORKTEST request', type: 'Project', department: 'Finance', date: '2026-12-31', category: 'Enhancement', description: 'Work access test.', criteria: '', ...overrides });
+const request = (overrides = {}) => ({ title: 'WORKTEST request', type: 'Project', department: 'FINANCE', date: '2026-12-31', category: 'EXCEL', description: 'Work access test.', criteria: '', ...overrides });
 async function act(cookie, id, action, input = {}, extra = {}) {
   const t = (await ticketOf(cookie, id)).json?.tickets?.[0];
   return post(`${W}/tickets/${id}/actions`, cookie, { version: t ? t.version : 1, action, input, ...extra });

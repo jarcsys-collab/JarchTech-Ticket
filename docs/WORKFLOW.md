@@ -10,9 +10,18 @@ New accounts are Requestors. Every rule is enforced on the server (lists, search
 
 If the Requestor's account is disabled, an Admin other than the worker reviews for them, as for self-requested work. If the worker can no longer act, Admins are asked to reassign it.
 
+## Departments and request categories
+
+Both are required on a new request, chosen from a searchable list, with nothing chosen in advance. They are set once, on the request form.
+
+- **Departments:** LEGAL · SALES · BUSINESS DEVELOPMENT · LEARNING · SUPPLY CHAIN · FINANCE · JARCET · SYS · HR & ADMIN · REGULATORY · COMMUNICATIONS · OOP
+- **Request categories:** NETWORK, HARDWARE, & SOFTWARE SUPPORT · MONDAY · POWERBI · EXCEL · BUSINESS CENTRAL · ECOM · SUPPORT FOR DISTRIBUTOR
+
+Older requests keep their original values: nothing renames or reclassifies them. Those values stay readable, can be filtered on (under "Earlier values" when a record you can see has one), and never stop an unrelated update. They are not offered for new requests.
+
 ## Request types
 
-Chosen on the request form, separate from the category (bug, enhancement, access request, ...). An Admin can change it until planning is agreed.
+Chosen on the request form, separate from the request category. An Admin can change it until planning is agreed.
 
 - **Ticket:** simple work. No mandatory meeting, Gantt chart, or project.
 - **Project:** a mandatory requirements meeting and project planning before development.

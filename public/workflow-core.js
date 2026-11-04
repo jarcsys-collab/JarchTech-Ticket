@@ -30,8 +30,13 @@
   const VIEWS = ['Requestor', 'Admin', 'Developer'];
   const STAFF = ['Admin', 'Developer'];
   const TYPES = ['Ticket', 'Project'];
-  const DEPARTMENTS = ['Sales', 'Operations', 'Finance', 'Human Resources', 'Procurement', 'Customer Service', 'IT'];
-  const CATEGORIES = ['New feature', 'Enhancement', 'Bug / issue', 'Access request'];
+  // Offered for new requests, in this order. Labels are exactly as the owner set them.
+  const DEPARTMENTS = ['LEGAL', 'SALES', 'BUSINESS DEVELOPMENT', 'LEARNING', 'SUPPLY CHAIN', 'FINANCE', 'JARCET', 'SYS', 'HR & ADMIN', 'REGULATORY', 'COMMUNICATIONS', 'OOP'];
+  const CATEGORIES = ['NETWORK, HARDWARE, & SOFTWARE SUPPORT', 'MONDAY', 'POWERBI', 'EXCEL', 'BUSINESS CENTRAL', 'ECOM', 'SUPPORT FOR DISTRIBUTOR'];
+  // Values on older records. They are kept as they are, stay readable and filterable, and are no longer offered for new
+  // requests. Nothing renames them, and only creating a request checks these fields.
+  const EARLIER_DEPARTMENTS = ['Sales', 'Operations', 'Finance', 'Human Resources', 'Procurement', 'Customer Service', 'IT'];
+  const EARLIER_CATEGORIES = ['New feature', 'Enhancement', 'Bug / issue', 'Access request'];
   const PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
   const EARLY = ['Submitted', 'Under review', 'Waiting for information', 'On hold'];
   const FINAL = ['Closed', 'Rejected', 'Cancelled'];
@@ -662,7 +667,7 @@
   // The next step on a linked scope change (for action lists).
   const nextChangeStep = (c, t, contexts = []) => pick(CHANGE_STEPS, t, (s, input, ctx) => changeAction(copy(c), copy(t), s.action, input, ctx), contexts);
 
-  const api = { WorkflowError, VIEWS, STAFF, TYPES, STAGES, SAMPLE_DEVELOPER, SIM_ADMIN, IDENTITIES, DEPARTMENTS, CATEGORIES, PRIORITIES, CHANGE_STATUSES, CHANGE_SETTLED, MAX_TASKS, EARLY, FINAL, COMPLETING, MAX_EVIDENCE, validateProjectTasks, createTicket, ticketAction, createChange, changeAction, applyChangeEffect, simulatedContext, roles, typeOf, agreementOf, completionOf, activeEvidence, bothConfirmed, closable, stageOf, missingSteps, safeUrl, nextStep, nextChangeStep };
+  const api = { WorkflowError, VIEWS, STAFF, TYPES, STAGES, SAMPLE_DEVELOPER, SIM_ADMIN, IDENTITIES, DEPARTMENTS, CATEGORIES, EARLIER_DEPARTMENTS, EARLIER_CATEGORIES, PRIORITIES, CHANGE_STATUSES, CHANGE_SETTLED, MAX_TASKS, EARLY, FINAL, COMPLETING, MAX_EVIDENCE, validateProjectTasks, createTicket, ticketAction, createChange, changeAction, applyChangeEffect, simulatedContext, roles, typeOf, agreementOf, completionOf, activeEvidence, bothConfirmed, closable, stageOf, missingSteps, safeUrl, nextStep, nextChangeStep };
   if (typeof module !== 'undefined') module.exports = api;
   else root.WorkflowCore = api;
 })(typeof window !== 'undefined' ? window : globalThis);
