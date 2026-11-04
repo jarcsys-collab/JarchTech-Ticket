@@ -307,6 +307,92 @@ test('an open scope change blocks closure, and approving one on released work cl
   assert.equal(t.dueDate, '2030-08-01');
 });
 
+test('an interrupted scope change approval cannot bypass the agreement, the confirmations, or closure', async () => {
+  const engine = app.auth.engines.work;
+  const interruptedApproval = async id => {
+    const cr = (await post(`${W}/tickets/${id}/changes`, req, { requestId: `official-crash-${rid++}-${Date.now()}`, ticketVersion: (await ticketOf(id)).version, input: { title: 'Interrupted', reason: 'x', criteria: 'y' } })).json.created;
+    await changeAct(admin, cr, 'status', { status: 'Assessment' });
+    await changeAct(dev, cr, 'assess', { impact: 'z', effort: '1 day', date: '2030-09-01' });
+    await changeAct(req, cr, 'agree');
+    engine.faults.beforeEffect = () => { throw new Error('simulated stop'); };
+    const stopped = await changeAct(admin, cr, 'approve');
+    engine.faults.beforeEffect = null;
+    assert.equal(stopped.status, 500);
+    return cr;
+  };
+  const ready = async () => {
+    const id = await projectInDevelopment(admin, dev, req, devId, 'Person 2');
+    await ok(dev, id, 'toggle-task', { index: 0, done: true });
+    await ok(dev, id, 'add-evidence', { links: [{ url: 'https://example.com/a' }] });
+    await ok(dev, id, 'worker-complete', { summary: 'Delivered' });
+    await ok(req, id, 'requestor-confirm');
+    return id;
+  };
+
+  // The stop leaves the change approved and the request not yet updated: the exact state that must not be usable.
+  const id = await ready();
+  const cr = await interruptedApproval(id);
+  const half = await ticketOf(id), saved = await changeOf(cr);
+  assert.equal(saved.status, 'Approved');
+  assert.ok(saved.pendingEffect);
+  assert.equal(half.agreements.length, 1);
+  assert.ok(half.completion.worker, 'still holding the old confirmations');
+
+  // The next action on the request finishes it first, so stale confirmations cannot be used to hand over or close.
+  const handover = await act(dev, id, 'status', { status: 'Released' });
+  assert.equal(handover.status, 409, handover.text);
+  const t = await ticketOf(id);
+  assert.equal(t.agreements.length, 2, 'agreement v2 exists');
+  assert.equal(t.agreements[1].source, cr);
+  assert.equal(t.agreements[0].requirements, 'R', 'v1 unchanged');
+  assert.equal(t.dueDate, '2030-09-01');
+  assert.equal(t.status, 'In progress');
+  assert.equal(t.completion.worker, null);
+  assert.equal(t.completion.requestor, null);
+  assert.equal(t.tasks.length, 2);
+  assert.ok(t.history.some(h => h.text.includes(`${cr} approved`) && h.actor === 'Person 1'), 'recorded for the Admin who approved');
+  assert.ok(!(await changeOf(cr)).pendingEffect);
+  assert.equal((await act(admin, id, 'status', { status: 'Closed' })).status, 409);
+
+  // Finishing again changes nothing, and internal markers stay on the server.
+  const version = (await ticketOf(id)).version;
+  assert.equal(await engine.recoverEffects(), 0);
+  assert.equal((await ticketOf(id)).version, version);
+  const client = (await call(`${W}/tickets/${id}`, { cookie: req })).json;
+  assert.ok(!('appliedEffects' in client.tickets[0]));
+  assert.ok(!client.changes.some(c => 'pendingEffect' in c));
+
+  // Nobody touches it: the scheduler finishes it, also after a restart, and a repeated run does not apply it twice.
+  const second = await ready();
+  const cr2 = await interruptedApproval(second);
+  assert.ok((await changeOf(cr2)).pendingEffect);
+  await db.collection('scheduler_locks').deleteOne({ _id: 'reminders' });
+  const reminders = createReminders({ db, workspaces: Object.values(app.auth.engines).filter(Boolean), instanceId: 'recover-test' });
+  await reminders.runOnce();
+  await reminders.runOnce();
+  await reminders.stop();
+  assert.equal((await ticketOf(second)).agreements.length, 2);
+  assert.equal((await ticketOf(second)).tasks.length, 2);
+  assert.ok(!(await changeOf(cr2)).pendingEffect);
+
+  // A stop after the request was updated but before the marker was cleared: not applied twice.
+  const third = await ready();
+  const cr3 = await interruptedApproval(third);
+  await engine.recoverEffects();
+  const marker = (await ticketOf(third)).appliedEffects.at(-1);
+  await db.collection('ticket_changes').updateOne({ id: cr3 }, { $set: { pendingEffect: { key: marker, effect: { kind: 'approve', approval: { name: 'Person 1', time: 't' } }, actor: { id: adminId, name: 'Person 1' }, view: 'Admin', at: new Date() } } });
+  await engine.recoverEffects();
+  assert.equal((await ticketOf(third)).agreements.length, 2);
+  assert.ok(!(await changeOf(cr3)).pendingEffect);
+
+  // Another person's attempt reveals nothing about a request they cannot see, even mid-recovery.
+  const fourth = await ready();
+  const cr4 = await interruptedApproval(fourth);
+  assert.equal((await changeAct(stranger, cr4, 'status', { status: 'In progress' })).status, 404);
+  assert.ok((await changeOf(cr4)).pendingEffect, 'a stranger cannot trigger anything');
+  await engine.recoverEffects();
+});
+
 test('5. Admin self-assignment works with independent Requestor confirmation', async () => {
   const id = await newRequest(req);
   await assign(admin, id, adminId);

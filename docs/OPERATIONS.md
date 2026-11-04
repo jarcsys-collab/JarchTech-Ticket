@@ -12,7 +12,7 @@ guide, not a formal security audit or a guarantee.
 | --- | --- |
 | Service | Railway project `JarcTech-Ticket`, service `JarcTech-Ticket`, environment `production`, one instance |
 | Deploys | Automatically from `main` on GitHub |
-| Start and health check | `npm start`, `/readyz`, restart on failure (`railway.json`) |
+| Start and health check | `npm start`, `/readyz` (60-second window), restart on failure. Set in the Railway service settings and in `railway.json`, which Railway stops reading on 2026-12-01 |
 | Database | MongoDB Atlas, database `jarctech_ticket_staging` |
 | Sign-in | Microsoft Entra ID, the existing app registration; member accounts of the company tenant only |
 
@@ -102,7 +102,7 @@ The `release.official` audit event is only a marker. Earlier versions ignore it.
 1. **No confirmed automatic backup.** See above. A database loss could lose everything since the last manual `db:backup`.
 2. **Storage plan unconfirmed.** The Atlas plan could not be read from here. If it is the free M0 tier, its 512 MB is shared by data, indexes, and files (real 200 MB limit, plus up to 200 MB of beta files allowed, of which about 2 MB is used), and it has connection and throughput limits unsuited to heavy use. The Users screen shows storage in use. Review before relying on attachments at volume.
 3. **Attachments are not scanned for malware.** Types and content are checked, and they download rather than open, but a harmful document can still be uploaded. People should treat them as they would email attachments. CSV files can contain spreadsheet formulas.
-4. **Two records are not updated in one database transaction.** A scope change and its request are saved one after the other. A crash at that exact moment could leave a change approved without its new agreement version. It would show as a change without the matching task; retries and undo cover ordinary contention, not a crash.
+4. **A scope change and its request are two saves, made recoverable rather than transactional.** An approved, released, or closed change is saved with a `pendingEffect` describing what it does to the request, and the request records the effect's key in the same write that applies it, so it applies exactly once. If the process stops in between, the effect is finished before the next action on that request or its changes, and within one scheduler run (5 minutes, also after a restart) otherwise. It cannot be used to bypass approval, the agreement lock, confirmations, or closure. Until then the request may briefly *show* its earlier agreement. To inspect: find `ticket_changes` documents with a `pendingEffect`; the log says "finished N interrupted scope change update(s)". A new change that stops before its note reaches the request has no rule attached: it appears on the request and holds up closure until an Admin rejects it. In-app notifications are sent after a save, and one lost in a crash is not resent.
 5. **Rate limits are per instance and in memory.** They stop runaway clients and casual abuse, not a determined attacker. Adding a second instance needs a shared store, and would also multiply the limits.
 6. **Scale.** The dashboard loads every record the person may see. This suits the current size (hundreds of requests), but thousands would need paging there too.
 7. **Sign-in identity.** Roles bind to the Entra object ID, but the first sign-in links an invitation or a conflict check by email address. This relies on the tenant administrators controlling those addresses.
@@ -118,7 +118,7 @@ These need portal access that this work did not have.
 - [ ] **Atlas network access:** the app's Railway service has no fixed outbound address on its current plan, so the list is probably open to all addresses. Confirm, and restrict it if static outbound addresses become available.
 - [ ] **Atlas database user:** the app has `readWrite` on this database only, which is good. Consider rotating the password (it is also in the owner's ignored local `.env.staging`), and update Railway when you do.
 - [ ] **Entra:** note the client secret's expiry date. Sign-in stops working when it expires.
-- [ ] **Railway before 2026-12-01:** `railway.json` is deprecated and stops being read then. The start command and health check come from it, and the service has no health check of its own. Run `railway config migrate`, or set `/readyz` in the service settings.
+- [ ] **Railway after 2026-12-01:** [Railway stops reading `railway.json`](https://docs.railway.com/infrastructure-as-code) then. The health check and start command are also in the service settings, so deployment keeps working; delete the file, or move to `.railway/railway.ts` with `railway config migrate` if you want settings in code. Railway checks `/readyz` only during a deployment, not afterwards, so an outage later needs outside monitoring to be noticed.
 - [ ] **GitHub:** `main` has no branch protection. Consider requiring the `check` job, since `main` deploys automatically.
 
 ## Admin onboarding

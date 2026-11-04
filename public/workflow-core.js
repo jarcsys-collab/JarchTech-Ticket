@@ -453,7 +453,6 @@
     // accept its own work; a different Admin reviews instead.
     const req = (r.req && !(ctx.sameParty && ctx.sameParty(t))) || r.reviewer;
     const moved = 'This change has moved on since it was opened. Refresh and try again.';
-    const completeTask = ticket => { const task = ticket.tasks.find(x => x.title.startsWith(c.id + ':')); if (task) task.done = true; return []; };
     switch (action) {
       case 'status': {
         const to = input.status;
@@ -468,7 +467,8 @@
         allow({ Assessment: admin, 'In progress': worker, Accepted: req, Released: worker, Closed: admin }[to]);
         inState(rules[to], moved);
         c.status = to;
-        return { notes: [`${ctx.view}: change moved to ${c.status}.`], ticketEffect: ['Released', 'Closed'].includes(to) ? completeTask : null };
+        const effect = ['Released', 'Closed'].includes(to) ? { kind: 'complete-task' } : null;
+        return { notes: [`${ctx.view}: change moved to ${c.status}.`], effect, ticketEffect: effect ? ticket => applyChangeEffect(c, ticket, effect, ctx) : null };
       }
       case 'assess': {
         allow(worker, 'The assigned worker assesses the impact.');
@@ -492,33 +492,8 @@
         inState(!FINAL.includes(t.status), 'The linked request has ended, so this change cannot be approved. Reject it instead.');
         const approval = record(ctx, t);
         c.status = 'Approved'; c.approvedBy = approval.name; c.approvedAt = approval.time;
-        return {
-          notes: ['Admin approved change. Project plan updated.'],
-          ticketEffect: ticket => {
-            const notes = [];
-            ticket.tasks.push({ title: `${c.id}: ${c.title}`, done: false });
-            const open = !FINAL.includes(ticket.status);
-            const previous = ticket.dueDate || ticket.date;
-            if (open) { ticket.date = c.date; ticket.dueDate = c.date; }
-            // A new agreement version; the earlier versions are kept unchanged.
-            const prior = agreementOf(ticket);
-            if (prior) {
-              ticket.agreements = [...ticket.agreements, {
-                version: prior.version + 1, source: c.id,
-                requirements: `${prior.requirements}\n\n${c.id}: ${c.title}. ${c.reason}`, criteria: `${prior.criteria}\n\n${c.id}: ${c.criteria}`,
-                notes: c.impact, requestor: c.requestorAgreedBy || null, approvedBy: approval, lockedAt: approval.time
-              }];
-              Object.assign(ticket, { requirements: agreementOf(ticket).requirements, criteria: agreementOf(ticket).criteria });
-            }
-            notes.push(`${c.id} approved and added to the project plan${prior ? ` as agreement v${prior.version + 1}` : ''}.${open && previous !== c.date ? ` Delivery target changed from ${previous || 'not set'} to ${c.date}.` : ''}`);
-            // Approved scope changes the deliverable, at any stage before closure: earlier confirmations no longer apply.
-            if (COMPLETING.includes(ticket.status)) {
-              notes.push(...invalidate(ticket, `the agreed scope changed (${c.id}).`, ctx));
-              ticket.status = 'In progress';
-            }
-            return notes;
-          }
-        };
+        const effect = { kind: 'approve', approval };
+        return { notes: ['Admin approved change. Project plan updated.'], effect, ticketEffect: ticket => applyChangeEffect(c, ticket, effect, ctx) };
       }
       case 'decision': {
         const next = input.status;
@@ -545,6 +520,39 @@
       }
       default: fail('invalid', 'Unknown action.');
     }
+  }
+
+  // What a saved change does to its original request. Built only from the saved change and this description, so the
+  // server can finish it after an interruption. Returns the request's activity notes.
+  function applyChangeEffect(c, ticket, effect, ctx) {
+    if (effect.kind === 'complete-task') {
+      const task = ticket.tasks.find(x => x.title.startsWith(c.id + ':'));
+      if (task) task.done = true;
+      return [];
+    }
+    const { approval } = effect;
+    const notes = [];
+    ticket.tasks.push({ title: `${c.id}: ${c.title}`, done: false });
+    const open = !FINAL.includes(ticket.status);
+    const previous = ticket.dueDate || ticket.date;
+    if (open) { ticket.date = c.date; ticket.dueDate = c.date; }
+    // A new agreement version; the earlier versions are kept unchanged.
+    const prior = agreementOf(ticket);
+    if (prior) {
+      ticket.agreements = [...ticket.agreements, {
+        version: prior.version + 1, source: c.id,
+        requirements: `${prior.requirements}\n\n${c.id}: ${c.title}. ${c.reason}`, criteria: `${prior.criteria}\n\n${c.id}: ${c.criteria}`,
+        notes: c.impact, requestor: c.requestorAgreedBy || null, approvedBy: approval, lockedAt: approval.time
+      }];
+      Object.assign(ticket, { requirements: agreementOf(ticket).requirements, criteria: agreementOf(ticket).criteria });
+    }
+    notes.push(`${c.id} approved and added to the project plan${prior ? ` as agreement v${prior.version + 1}` : ''}.${open && previous !== c.date ? ` Delivery target changed from ${previous || 'not set'} to ${c.date}.` : ''}`);
+    // Approved scope changes the deliverable, at any stage before closure: earlier confirmations no longer apply.
+    if (COMPLETING.includes(ticket.status)) {
+      notes.push(...invalidate(ticket, `the agreed scope changed (${c.id}).`, ctx));
+      ticket.status = 'In progress';
+    }
+    return notes;
   }
 
   // The overview stage of a request (see STAGES), or 'ended' for rejected and cancelled requests.
@@ -654,7 +662,7 @@
   // The next step on a linked scope change (for action lists).
   const nextChangeStep = (c, t, contexts = []) => pick(CHANGE_STEPS, t, (s, input, ctx) => changeAction(copy(c), copy(t), s.action, input, ctx), contexts);
 
-  const api = { WorkflowError, VIEWS, STAFF, TYPES, STAGES, SAMPLE_DEVELOPER, SIM_ADMIN, IDENTITIES, DEPARTMENTS, CATEGORIES, PRIORITIES, CHANGE_STATUSES, CHANGE_SETTLED, MAX_TASKS, EARLY, FINAL, COMPLETING, MAX_EVIDENCE, validateProjectTasks, createTicket, ticketAction, createChange, changeAction, simulatedContext, roles, typeOf, agreementOf, completionOf, activeEvidence, bothConfirmed, closable, stageOf, missingSteps, safeUrl, nextStep, nextChangeStep };
+  const api = { WorkflowError, VIEWS, STAFF, TYPES, STAGES, SAMPLE_DEVELOPER, SIM_ADMIN, IDENTITIES, DEPARTMENTS, CATEGORIES, PRIORITIES, CHANGE_STATUSES, CHANGE_SETTLED, MAX_TASKS, EARLY, FINAL, COMPLETING, MAX_EVIDENCE, validateProjectTasks, createTicket, ticketAction, createChange, changeAction, applyChangeEffect, simulatedContext, roles, typeOf, agreementOf, completionOf, activeEvidence, bothConfirmed, closable, stageOf, missingSteps, safeUrl, nextStep, nextChangeStep };
   if (typeof module !== 'undefined') module.exports = api;
   else root.WorkflowCore = api;
 })(typeof window !== 'undefined' ? window : globalThis);

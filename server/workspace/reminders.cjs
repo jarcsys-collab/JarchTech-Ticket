@@ -39,6 +39,8 @@ function createReminders({ db, workspaces, settings = DeadlineCore.DEFAULTS, ema
     const at = now();
     let created = 0;
     for (const ws of workspaces) {
+      // Before reading anything: finish any scope change update a restart interrupted.
+      await ws.recoverEffects();
       const items = [];
       for (const { ticket, changes } of await ws.scan()) {
         for (const r of DeadlineCore.reminders(ticket, changes, { now: at, settings })) items.push({ ...r, ticket });

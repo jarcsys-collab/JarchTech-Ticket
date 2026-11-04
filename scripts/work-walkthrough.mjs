@@ -92,7 +92,7 @@ function pageApi(cdp) {
   const evaluate = async expr => { const r = await cdp.send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true, userGesture: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text); return r.result.value; };
   const w = async js => { await evaluate(HELPERS); return evaluate(js); };
   // Waits until no save or refresh is in flight and the shared records are loaded.
-  const settle = async () => { for (let i = 0; i < 80; i++) { const s = await w(`[!!window.JARC_BETA&&window.JARC_BETA.ready, __w.saveState()]`).catch(() => [false, '']); if (s[0] && s[1] !== 'saving') break; await sleep(100); } await sleep(250); };
+  const settle = async () => { for (let i = 0; i < 80; i++) { const s = await w(`[!!window.JARC_SERVER&&window.JARC_SERVER.ready, __w.saveState()]`).catch(() => [false, '']); if (s[0] && s[1] !== 'saving') break; await sleep(100); } await sleep(250); };
   const loads = async action => { const l = cdp.event('Page.loadEventFired'); await action(); await l; await sleep(400); };
   const nav = url => loads(() => cdp.send('Page.navigate', { url }));
   const shot = async name => { if (!SHOTS) return; const r = await cdp.send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(path.join(SHOTS, name), Buffer.from(r.data, 'base64')); };
