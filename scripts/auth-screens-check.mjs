@@ -152,9 +152,10 @@ try {
     await js(`localStorage.setItem('jarc-inspection-view', 'Admin'); localStorage.setItem('jarc-inspection:jarc-helpdesk-v1', '{"tickets":[],"changes":[],"notices":[]}'); true`);
     entra.signInNext(account(2, 'Rita Requestor', 'rita@jarc.example'));
     await clickAndLoad('a.primary');
+    for (let i = 0; i < 80 && !(await js(`!!(window.JARC_SERVER && JARC_SERVER.ready && document.querySelector('.record-count'))`)); i++) await sleep(100);
     check('invited Requestor lands in the app', await here() === '/' && await js(`!!document.querySelector('#app .stats')`));
     check('with INSPECTION_MODE off, a remembered inspection view is ignored (no banner, no Preview views, My workspace, real role)', await js(`typeof window.JARC_INSPECTION==='undefined' && !document.querySelector('#inspection-banner') && !document.querySelector('#preview-views') && !document.querySelector('[data-id="JRC-7001"]') && document.querySelector('.sidebar-bottom').textContent.includes('My workspace') && document.querySelector('#page-title').textContent==='My ticket'`));
-    check('demo role selector is hidden; header shows name, role, and Sign out', await js(`document.querySelector('.demo-role-label').hidden && document.querySelector('.signed-in-as').textContent==='Rita Requestor · Requestor' && !!document.querySelector('#sign-out') && !document.querySelector('#manage-users')`));
+    check('demo role selector is hidden; header shows name, role, and Sign out', await js(`!document.querySelector('.demo-role-label') && document.querySelector('.signed-in-as').textContent==='Rita Requestor · Requestor' && !!document.querySelector('#sign-out') && !document.querySelector('#manage-users')`));
     check('role comes from the server (Requestor view)', await js(`document.querySelector('#page-title').textContent==='My ticket' && document.querySelector('.record-count').textContent==='Your requests'`));
     check('existing browser record is kept unchanged in browser storage, apart from My workspace', await js(`!document.querySelector('[data-id="JRC-7001"]') && document.querySelector('.sidebar-bottom').textContent.includes('My workspace') && JSON.parse(localStorage.getItem('jarc-helpdesk-v1')).tickets[0].title==='Existing local record'`));
     await shot('03-requestor-app.png');
@@ -179,10 +180,10 @@ try {
     const dana = await db.collection('users').findOne({ email: 'dev@jarc.example' });
     check('an Admin can invite someone; they are listed as invited', dana?.status === 'invited' && await js(`[...document.querySelectorAll('.users-table tr')].some(r=>r.textContent.includes('dev@jarc.example') && r.querySelector('select[data-field=status]').selectedOptions[0].textContent==='Invited (not signed in yet)')`));
     await shot('06-users-screen.png');
-    await js(`{const s=document.querySelector('select[data-user="${dana._id}"][data-field="status"]');s.value='disabled';s.dispatchEvent(new Event('change'))} true`); await sleep(800);
+    await js(`{const s=document.querySelector('select[data-user="${dana._id}"][data-field="status"]');s.value='disabled';s.dispatchEvent(new Event('change'));document.querySelector('#user-confirm-yes').click()} true`); await sleep(800);
     check('an Admin can revoke a pending invitation', (await db.collection('users').findOne({ email: 'dev@jarc.example' })).status === 'disabled');
     const ritaId = String((await db.collection('users').findOne({ email: 'rita@jarc.example' }))._id);
-    await js(`{const s=document.querySelector('select[data-user="${ritaId}"][data-field="role"]');s.value='Developer';s.dispatchEvent(new Event('change'))} true`); await sleep(800);
+    await js(`{const s=document.querySelector('select[data-user="${ritaId}"][data-field="role"]');s.value='Developer';s.dispatchEvent(new Event('change'));document.querySelector('#user-confirm-yes').click()} true`); await sleep(800);
     check('Admin role change is saved on the server', (await db.collection('users').findOne({ email: 'rita@jarc.example' })).role === 'Developer');
 
     // ---------- Scenario 2: ACCESS_POLICY=tenant-members (beta) ----------
@@ -190,11 +191,11 @@ try {
     const signInAs = async claims => { entra.signInNext(claims); await clickAndLoad('a.primary'); };
     const signOutBeta = async () => { const l = event('Page.loadEventFired'); await js(`document.querySelector('#sign-out').click(); true`); await l; await sleep(300); await nav(`${beta.origin}/auth/signin`); };
     await nav(`${beta.origin}/`);
-    check('beta: sign-in page explains that company members can sign in as Requestors', await here() === '/auth/signin' && await js(`document.body.textContent.includes('all company member accounts can sign in; new users start as Requestors')`));
+    check('beta: sign-in page explains that company members can sign in as Requestors', await here() === '/auth/signin' && await js(`document.body.textContent.includes('Company members can sign in; a new account starts as a Requestor')`));
     await shot('11-beta-sign-in.png');
 
     await signInAs(account(32, 'Mia Member', 'mia@jarc.example'));
-    check('beta: a member with no invitation lands in the app as Requestor', await here() === '/' && await js(`document.querySelector('.signed-in-as').textContent==='Mia Member · Requestor' && document.querySelector('#page-title').textContent==='My ticket' && !document.querySelector('#manage-users') && document.querySelector('.demo-role-label').hidden`));
+    check('beta: a member with no invitation lands in the app as Requestor', await here() === '/' && await js(`document.querySelector('.signed-in-as').textContent==='Mia Member · Requestor' && document.querySelector('#page-title').textContent==='My ticket' && !document.querySelector('#manage-users') && !document.querySelector('.demo-role-label')`));
     const mia = await betaUsers.findOne({ email: 'mia@jarc.example' });
     check('beta: the new account was created as an active Requestor linked to the Entra account', mia?.role === 'Requestor' && mia.status === 'active' && mia.autoAdmitted === true && mia.entraObjectId === account(32).oid);
     await shot('12-beta-member-app.png');
@@ -224,12 +225,12 @@ try {
 
     await signInAs(account(31, 'Bea Boss', 'boss@jarc.example'));
     await js(`document.querySelector('#manage-users').click(); true`); await sleep(600);
-    check('beta: the Admin Users screen explains the beta access policy and lists auto-admitted members', await js(`document.querySelector('.drawer').textContent.includes('Beta access: every member account of the company tenant can sign in and starts as a Requestor') && document.querySelector('.users-table').textContent.includes('mia@jarc.example')`));
+    check('beta: the Admin Users screen explains that colleagues appear after signing in, and lists auto-admitted members', await js(`document.querySelector('.drawer').textContent.includes('must sign in once with their company Microsoft account before their account appears here') && document.querySelector('.users-table').textContent.includes('mia@jarc.example')`));
     await shot('14-beta-users-screen.png');
 
     check('no page errors', errors.length === 0, errors.join(' | '));
   } catch (err) {
-    if (!interrupted) check('check crashed', false, err.stack);
+    if (!interrupted) check('check crashed', false, `${err.stack}${errors.length ? ` | page errors: ${errors.join(' | ')}` : ''}`);
   }
 } catch (err) {
   if (!interrupted) { console.error(`Auth screen check could not start: ${err.message}`); await cleanup(); process.exit(2); }

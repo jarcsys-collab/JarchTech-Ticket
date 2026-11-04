@@ -37,7 +37,7 @@ const DENIED = {
 
 const SIGN_IN_MESSAGE = {
   'invite-only': 'Use your company Microsoft account. Access is by invitation from a JarcTech Ticket administrator.',
-  'tenant-members': 'Use your company Microsoft account. During the beta, all company member accounts can sign in; new users start as Requestors.'
+  'tenant-members': 'Use your company Microsoft account. Company members can sign in; a new account starts as a Requestor, and an Admin can assign other roles.'
 };
 
 const pages = {
@@ -46,6 +46,7 @@ const pages = {
   signedOut: () => page({ title: 'Signed out', heading: 'You have signed out', message: 'Your JarcTech Ticket session has ended.', action: signInButton('Sign in again') }),
   failed: message => page({ title: 'Sign-in failed', heading: 'Sign-in could not be completed', message, action: signInButton('Try again') }),
   notSetUp: () => page({ title: 'Sign-in not set up', heading: 'Sign-in is not set up yet', message: 'The JarcTech Ticket database has not been prepared for sign-in. An administrator needs to complete the one-time setup.' }),
+  tooMany: () => page({ title: 'Too many attempts', heading: 'Too many sign-in attempts', message: 'Too many sign-in attempts came from this address. Wait a minute, then try again.', action: signInButton('Try again') }),
   unavailable: () => page({ title: 'Sign-in unavailable', heading: 'Sign-in is temporarily unavailable', message: 'JarcTech Ticket could not reach Microsoft sign-in. Please try again in a few minutes.', action: signInButton('Try again') })
 };
 

@@ -1,5 +1,4 @@
-/* Signed-in workspace extras: in-app notifications (including due-date reminders) and attachments, for My workspace
-   and the beta simulation. The server adds this script last in signed-in mode; it does nothing during local
+/* Signed-in workspace extras: in-app notifications (including due-date reminders) and attachments. The server adds this script last in signed-in mode; it does nothing during local
    inspection. Uses the app.js and projects.js globals (shared, simulated, state, role, detail, projectView,
    changeDetail, open, toast) and window.JARC_SERVER.
    My workspace notifications go to your account (and the shared Admin inbox for Admins). The simulation uses simulated
@@ -29,7 +28,7 @@
 
   function openPanel() {
     open(`<div class="tagline">IN-APP NOTIFICATIONS</div><h2>Notifications</h2><p id="inbox-label">Loading…</p><div class="actions"><button class="secondary" id="mark-all" disabled>Mark all as read</button><button class="secondary" id="reload-notifications">Refresh</button></div><div id="notification-list" aria-live="polite" aria-busy="true"><div class="empty">Loading notifications…</div></div>
-      <details class="activity-feed"><summary>Shared workspace activity (everyone)</summary>${state.notices.slice(0, 40).map(n => `<div class="notice">${esc(n.text)}<small>${esc(n.time)}</small></div>`).join('') || '<p>No activity yet.</p>'}</details>`);
+      <details class="activity-feed"><summary>${simulated ? 'Shared workspace activity (everyone)' : 'Recent activity on the requests you can see'}</summary>${state.notices.slice(0, 40).map(n => `<div class="notice">${esc(n.text)}<small>${esc(n.time)}</small></div>`).join('') || '<p>No activity yet.</p>'}</details>`);
     $('#mark-all').onclick = markAll;
     $('#reload-notifications').onclick = () => loadPage(false);
     loadPage(false);
@@ -57,7 +56,7 @@
     $('#inbox-label').innerHTML = `<strong>${esc(inboxLabel)}</strong><br>${simulated ? 'Simulated recipients for the shared beta test data: nothing is emailed or sent to the people named in sample records.' : `Notifications for your account, including due-date reminders and escalations. Email: ${window.JARC_SESSION.emailDelivery === 'enabled' ? 'available (turn it on under Settings)' : 'not enabled, so notifications are in-app only'}.`} Read and unread are tracked for you only.`;
     $('#mark-all').disabled = !unreadCount;
     $('#notification-list').innerHTML = !items.length
-      ? `<div class="empty">No notifications for the ${esc(role)} view yet. Assignments, comments, requests for information, meeting proposals, acceptance requests, and returned corrections will appear here.</div>`
+      ? `<div class="empty">No notifications ${simulated ? `for the ${esc(role)} view ` : ''}yet. Assignments, comments, requests for information, meeting proposals, acceptance requests, and returned corrections will appear here.</div>`
       : `<ul class="notifications">${items.map(n => `<li class="notification${n.read ? '' : ' unread'}"><button class="notification-open" data-open="${n.id}"><b>${n.read ? '' : '<span class="sr-only">Unread: </span>'}${esc(n.title)}</b><span>${esc(n.text)}</span><small>${esc(n.time)} · ${n.reminder ? 'Automatic reminder' : `${esc(n.actor)} (${esc(n.actorView)}${simulated ? ' view' : ''})`}</small></button>${n.read ? '' : `<button class="secondary mark-read" data-read="${n.id}">Mark read<span class="sr-only">: ${esc(n.title)}</span></button>`}</li>`).join('')}</ul>${next ? '<div class="actions centered"><button class="secondary" id="older">Show older</button></div>' : ''}`;
     document.querySelectorAll('[data-open]').forEach(b => b.onclick = () => openNotification(items.find(n => n.id === b.dataset.open)));
     document.querySelectorAll('[data-read]').forEach(b => b.onclick = async () => {
@@ -96,7 +95,7 @@
   showBadge(0);
   window.addEventListener('jarc-workspace-loaded', refreshUnread);
   window.addEventListener('jarc-workspace-saved', refreshUnread);
-  $('#demo-role').addEventListener('change', () => { showBadge(0); refreshUnread(); });
+  if ($('#demo-role')) $('#demo-role').addEventListener('change', () => { showBadge(0); refreshUnread(); });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshUnread(); });
   setInterval(() => { if (document.visibilityState === 'visible') refreshUnread(); }, POLL_MS);
   refreshUnread();
@@ -180,8 +179,9 @@
     if (all.length) {
       const section = document.createElement('section');
       section.className = 'ticket-files';
-      section.innerHTML = `<h3>Attachments <small>(${all.length})</small></h3><ul class="file-links">${all.map(f => `<li><a href="${B.base}/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(R.formatSize(f.size))} · ${esc(f.by || '')} · ${esc(f.time)}</small></li>`).join('')}</ul>`;
-      $('.timeline').previousElementSibling.before(section);
+      Object.assign(section.dataset, { section: 'attachments', title: `Attachments (${all.length})` });
+      section.innerHTML = `<ul class="file-links">${all.map(f => `<li><a href="${B.base}/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(R.formatSize(f.size))} · ${esc(f.by || '')} · ${esc(f.time)}</small></li>`).join('')}</ul>`;
+      $('[data-section="activity"]').before(section);
     }
     const text = form.querySelector('textarea');
     text.required = false;
@@ -202,8 +202,7 @@
         if (proof.busy()) return toast('Wait for the uploads to finish, or remove them.');
         const f = new FormData(evidence);
         const links = [0, 1].map(n => ({ label: String(f.get('label' + n) || '').trim(), url: String(f.get('url' + n) || '').trim() })).filter(l => l.url);
-        if (links.some(l => !WorkflowCore.safeUrl(l.url))) return toast('Links must be complete http:// or https:// addresses.');
-        if (!links.length && !proof.ids().length) return toast('Attach a file or add a deliverable link.');
+        if (evidenceProblems(evidence, links, proof.ids().length)) return;
         perform('ticket', id, 'add-evidence', { links, attachments: proof.ids() }, () => refresh(id));
       };
     }

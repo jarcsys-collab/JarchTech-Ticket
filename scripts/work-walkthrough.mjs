@@ -80,7 +80,7 @@ const HELPERS = `window.__w={
   submit(sel){__w.el(sel).requestSubmit()},
   view(r){__w.set('#demo-role',r)},
   open(id){__w.click('[data-id="'+id+'"]')},
-  esc(){document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
+  esc(){for(let i=0;i<2;i++)document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
   toast(){return document.querySelector('#toast').textContent},
   saveState(){return document.querySelector('.save').dataset.state||''},
   text(){return document.querySelector('#dialog-content').textContent},
@@ -92,7 +92,7 @@ function pageApi(cdp) {
   const evaluate = async expr => { const r = await cdp.send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true, userGesture: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text); return r.result.value; };
   const w = async js => { await evaluate(HELPERS); return evaluate(js); };
   // Waits until no save or refresh is in flight and the shared records are loaded.
-  const settle = async () => { for (let i = 0; i < 80; i++) { const s = await w(`[!!window.JARC_BETA&&window.JARC_BETA.ready, __w.saveState()]`).catch(() => [false, '']); if (s[0] && s[1] !== 'saving') break; await sleep(100); } await sleep(250); };
+  const settle = async () => { for (let i = 0; i < 80; i++) { const s = await w(`[!!window.JARC_SERVER&&window.JARC_SERVER.ready, __w.saveState()]`).catch(() => [false, '']); if (s[0] && s[1] !== 'saving') break; await sleep(100); } await sleep(250); };
   const loads = async action => { const l = cdp.event('Page.loadEventFired'); await action(); await l; await sleep(400); };
   const nav = url => loads(() => cdp.send('Page.navigate', { url }));
   const shot = async name => { if (!SHOTS) return; const r = await cdp.send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(path.join(SHOTS, name), Buffer.from(r.data, 'base64')); };
@@ -172,6 +172,11 @@ try {
     await reload(P1);
     check('the Admin sees every request and an unread Admin notification for the new one', await P1.w(`!!document.querySelector('[data-id="${ticketId}"]') && Number(document.querySelector('#notice-count').textContent)>=1`));
 
+    check('the Admin home separates administrative reviews from their own assigned work', await P1.w(`[...document.querySelectorAll('.queue h3')].map(h=>h.firstChild.textContent.trim()).join('|')==='Administrative reviews|Your assigned work' && [...document.querySelectorAll('.queue')[0].querySelectorAll('.queue-item')].some(b=>b.dataset.openTicket==='${ticketId}')`));
+    await P1.do(`document.querySelector('.home [data-open-ticket="${ticketId}"]').click()`);
+    check('real accounts get the next step with no simulation advice', await P1.w(`document.querySelector('#ns-title').textContent==='Review the request' && document.querySelector('#next-step').classList.contains('mine') && !document.querySelector('.ns-handoff') && !document.querySelector('[data-switch-view]')`));
+    await P1.w(`__w.esc();true`);
+
     section = 'assignment';
     await signIn(P2, 3, 'Dana Developer');
     await reload(P2);
@@ -217,7 +222,7 @@ try {
     check('the panel says email is not enabled', await P2.w(`__w.text().includes('not enabled, so notifications are in-app only')`));
     await P2.w(`__w.esc();__w.click('#settings');true`);
     await waitFor(P2, `!!document.querySelector('#prefs-form')`);
-    check('Settings explains that email delivery is not enabled', await P2.w(`__w.text().includes('Email delivery is not enabled')`));
+    check('Settings labels email delivery as not available', await P2.w(`__w.text().includes('email delivery is not set up') && document.querySelector('#prefs-form [name=emailReminders]').disabled`));
     await P2.do(`__w.set('#prefs-form [name=emailReminders]',true);__w.submit('#prefs-form')`);
     check('the email preference is saved for when email is enabled', (await users.findOne({ email: 'member3@jarc.example' })).emailReminders === true);
 
@@ -226,6 +231,7 @@ try {
     await sleep(800); await P2.settle(); await waitFor(P2, `!!window.JARC_SERVER && JARC_SERVER.ready`);
     check('switching to Beta simulation shows the beta banner and the Simulation view selector', await P2.w(`!!document.querySelector('#beta-banner') && !document.querySelector('.demo-role-label').hidden && JARC_SERVER.simulated`));
     await P2.do(`__w.view('Admin')`);
+    await waitFor(P2, `JARC_SERVER.view==='Admin' && !!document.querySelector('[data-id="JRC-1042"]')`);
     check('the simulated Admin view shows only beta test records', await P2.w(`!document.querySelector('[data-id="${ticketId}"]') && !document.querySelector('[data-id="${adminTicket}"]') && !!document.querySelector('[data-id="JRC-1042"]')`));
     check('a simulated Admin view gives no user management and changes no real role', (await api(P2, 'GET', '/api/v1/users')).status === 403 && !await P2.w(`!!document.querySelector('#manage-users')`) && (await users.findOne({ email: 'member3@jarc.example' })).role === 'Developer');
     await P2.w(`__w.set('#workspace-switch','mine');true`);

@@ -1,8 +1,7 @@
 /* Server workspace client for signed-in mode. The server adds this script whenever Microsoft sign-in is on.
-   Two workspaces, one per page load, chosen with the header's Workspace switch (remembered in this browser):
-   - My workspace (/api/v1/work): real tickets; what you see and do comes from your account's role and ownership.
-   - Beta simulation (/api/v1/beta, only when BETA_SIMULATION=enabled): shared test data with switchable views.
-   Inspection mode (local preview) uses neither. Records come from and are saved to the server; nothing here reads or
+   My workspace (/api/v1/work) holds the real requests; what you see and do comes from your account's role and ownership.
+   Local and test configurations only: a Workspace switch can also offer the Beta simulation (/api/v1/beta, when
+   BETA_SIMULATION=enabled), and inspection mode (local preview) uses neither. The official deployment has neither. Records come from and are saved to the server; nothing here reads or
    writes browser storage except the remembered workspace and simulation view. A failed save is reported and never falls back to
    browser storage; dialogs stay open so typed text can be retried.
    Also reads list searches, notifications, and single tickets, and uploads attachments (workspace-features.js shows them).
@@ -58,19 +57,27 @@
     if (res.status === 401) return 'Your session has ended. Sign in again (for example in another tab), then retry. Your entry is still here.';
     if (res.status === 503 && res.data.message) return res.data.message;
     if (res.status === 404 && !simulated) return 'That record is not available to you. It may have been reassigned, or your access may have changed.';
+    if (res.status === 413) return 'This entry is too long to save. Shorten it and try again; your entry is still here.';
     if (res.status >= 500 || !res.data.message) return `${cap(NAME)} could not save this change. Your entry is still here; try again.`;
     return res.data.message;
   }
 
+  // The people this account can assign to, and (Admins) accounts that can no longer act: refreshed with the records.
+  function adopt(data) {
+    api.developers = data.developers || [];
+    api.cannotWork = data.cannotWork || [];
+    api.disabled = data.disabled || [];
+  }
   async function load() {
     status = 'loading';
     try {
       const res = await request('GET', BASE + '/workspace?view=' + encodeURIComponent(view));
+      if (res.status === 401) { location.href = '/auth/signin'; return; }
       if (!res.ok) throw new Error(explain(res));
       status = 'ready'; lastLoaded = Date.now();
       api.ready = true;
       setSaveStatus(SAVED, 'saved');
-      api.developers = res.data.developers || [];
+      adopt(res.data);
       hooks.replace(res.data);
       signal('jarc-workspace-loaded');
     } catch (err) {
@@ -87,6 +94,7 @@
       const res = await request('GET', BASE + '/workspace?view=' + encodeURIComponent(view));
       if (!res.ok) throw new Error(explain(res));
       lastLoaded = Date.now();
+      adopt(res.data);
       hooks.replace(res.data);
       signal('jarc-workspace-loaded');
     } catch { setSaveStatus('Could not refresh; showing the last loaded records', 'error'); }
@@ -103,7 +111,13 @@
       if (res.ok) { setSaveStatus(SAVED, 'saved'); setTimeout(() => signal('jarc-workspace-saved')); return res.data; }
       setSaveStatus('Not saved', 'error');
       toast(explain(res));
-      if (res.status === 409) onConflict(res.data);
+      if (res.status === 404 && !simulated) refresh(); // access changed: show what this account can still see
+      if (res.status === 409) {
+        onConflict(res.data);
+        // Lets the open request say that it changed elsewhere (guide.js), without discarding typed text.
+        const ids = [...(res.data.tickets || []).map(t => t.id), ...(res.data.changes || []).map(c => c.ticket)];
+        window.dispatchEvent(new CustomEvent('jarc-workspace-conflict', { detail: { ids } }));
+      }
       return null;
     } catch {
       setSaveStatus('Not saved', 'error');
@@ -121,6 +135,8 @@
     base: BASE,
     name: simulated ? 'Beta simulation' : 'My workspace',
     developers: [], // My workspace: active Developers (and, for an Admin, themselves): assignees and task owners
+    cannotWork: [], // Admins only: accounts that cannot act as the worker any more
+    disabled: [], // Admins only: disabled accounts
     // Switches workspace for this browser and reloads, so each page load works in exactly one workspace.
     switchTo(next) {
       try { localStorage.setItem(WORKSPACE_KEY, next === 'beta' ? 'beta' : 'mine'); } catch {}

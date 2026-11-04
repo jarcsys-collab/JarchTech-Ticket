@@ -1,8 +1,9 @@
 /* Signed-in mode only: the server adds this script (and window.JARC_SESSION) when AUTH_MODE=entra.
-   Shows who is signed in, the Workspace switch (My workspace or Beta simulation), Settings (email reminders),
-   a Sign out button, and the Users screen for Admins (the only role that manages users and roles). The role shown
-   comes from the server; role and access changes go through the users API, which the server checks on every request.
-   If an Admin changes your role while the page is open, the page reloads with the new role when you return to it. */
+   Shows who is signed in, Settings (email reminders), a Sign out button, and the Users screen for Admins (the only
+   role that manages users and roles). The role shown comes from the server; role and access changes go through the
+   users API, which the server checks on every request. If an Admin changes your role while the page is open, the page
+   reloads with the new role at the next check, unless you have unsaved text open.
+   The Workspace switch, simulation, and preview below exist only in local and test configurations. */
 (function () {
   const me = window.JARC_SESSION;
   if (!me) return;
@@ -11,7 +12,7 @@
     'invalid-email': 'Enter a valid work email address.', 'invalid-role': 'Choose a role.', 'already-exists': 'That email address already has an account or invitation.',
     'cannot-change-self': 'You cannot change your own role or access.', 'last-admin': 'At least one active Admin must remain.', 'changed-meanwhile': 'This person was changed by someone else meanwhile. Review and try again.',
     'invitation-not-accepted': 'This person has not signed in yet, so their invitation is still pending.', 'admin-only': 'Only Admins can manage users and roles.',
-    'cross-origin': 'The request was blocked because it did not come from JarcTech Ticket.'
+    'cross-origin': 'The request was blocked because it did not come from JarcTech Ticket.', 'rate-limited': 'Too many changes in a short time. Wait a moment and try again.'
   };
 
   const inspection = window.JARC_INSPECTION || null; // present only when the server enables INSPECTION_MODE
@@ -157,9 +158,9 @@
     const on = prefs.emailDelivery === 'enabled';
     open(`<div class="tagline">SETTINGS</div><h2>Your settings</h2><p>Signed in as ${esc(me.displayName)} (${esc(me.email)}) · ${esc(me.role)}. Your role is set by an Admin.</p>
       <h3>Reminders</h3><p>Due-date reminders, overdue alerts, pending approvals, and escalations always appear in the app (the bell). Dates use ${esc((me.deadlines || {}).timezone || 'Asia/Manila')} time.</p>
-      <form id="prefs-form"><label class="task"><input type="checkbox" name="emailReminders" ${prefs.emailReminders ? 'checked' : ''}>Also email me reminders and escalations (ticket number and reminder type only, with a sign-in link)</label>
-      <p class="read-only">${on ? 'Email delivery is enabled for this workspace.' : 'Email delivery is not enabled for this workspace yet, so no emails are sent. Your choice is saved for when it is.'}</p>
-      <div class="actions"><button class="primary">Save settings</button></div></form>`);
+      <form id="prefs-form"><label class="task"><input type="checkbox" name="emailReminders" ${prefs.emailReminders ? 'checked' : ''} ${on ? '' : 'disabled'}>Also email me reminders and escalations (ticket number and reminder type only, with a sign-in link)</label>
+      <p class="read-only">${on ? 'Email delivery is on for this workspace.' : '<b>Not available:</b> email delivery is not set up for this workspace, so no emails are sent. Notifications appear in the app only.'}</p>
+      ${on ? '<div class="actions"><button class="primary">Save settings</button></div>' : ''}</form>`);
     $('#prefs-form').onsubmit = async e => {
       e.preventDefault();
       try { await api('PATCH', '/api/v1/me/preferences', { emailReminders: e.target.elements.emailReminders.checked }); toast('Settings saved'); close(); }
@@ -167,17 +168,29 @@
     };
   }
 
-  // A role or access change by an Admin applies on the server at once. When you come back to this page, reload it if
-  // your role changed, so the screens match what the server now allows. A disabled account is signed out.
-  document.addEventListener('visibilitychange', async () => {
+  // A role or access change by an Admin applies on the server at once. This check brings the screens in line: when you
+  // return to the page and once a minute while it is showing. A form with typed text is never discarded; the server
+  // refuses anything no longer allowed, and the person sees why.
+  const typing = () => { const o = document.querySelector('#overlay'); return Boolean(o && !o.hidden && typeof dialogDirty !== 'undefined' && dialogDirty); };
+  async function checkAccount() {
     if (document.visibilityState !== 'visible') return;
     try {
       const res = await fetch('/api/v1/me', { credentials: 'same-origin' });
-      if (res.status === 401) { location.href = '/auth/signin'; return; }
+      if (res.status === 401) {
+        if (typing()) return toast('Your session has ended. Copy any text you want to keep, then sign in again.');
+        location.href = '/auth/signin';
+        return;
+      }
       const data = await res.json();
-      if (data.user && data.user.role !== me.role) { toast(`Your role is now ${data.user.role}. Reloading…`); setTimeout(() => location.reload(), 800); }
+      if (data.user && data.user.role !== me.role) {
+        if (typing()) return toast(`Your role is now ${data.user.role}. The page will update once you finish here.`);
+        toast(`Your role is now ${data.user.role}. Reloading…`);
+        setTimeout(() => location.reload(), 800);
+      }
     } catch {}
-  });
+  }
+  document.addEventListener('visibilitychange', checkAccount);
+  setInterval(checkAccount, 60000);
 
   async function api(method, url, body) {
     const res = await fetch(url, { method, credentials: 'same-origin', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -188,32 +201,74 @@
   }
   const message = err => ERRORS[err.message] || 'The change could not be saved. Please try again.';
 
+  // What a role or access change means for the person, shown before it is applied.
+  function changeImpact(u, field, value) {
+    const open = u.openAssigned ? ` ${u.openAssigned} open request${u.openAssigned === 1 ? '' : 's'} assigned to them will need reassigning.` : '';
+    if (field === 'status') return value === 'disabled' ? `They are signed out at once and cannot sign in.${open}` : 'They can sign in again with their previous role.';
+    return { Admin: 'They will see every request, manage users and roles, assign work, and close requests.', Developer: 'They will see the work assigned to them and their own requests, and can deliver assigned work. They cannot assign work or manage users.', Requestor: `They will see only their own requests.${open}` }[value] || '';
+  }
+  const ACTIVITY = {
+    'user.updated': e => {
+      const c = e.changes || {}, p = e.previous || {};
+      return [c.role ? `role ${p.role || '?'} → ${c.role}` : '', c.status ? `access ${p.status || '?'} → ${c.status}` : ''].filter(Boolean).join(', ');
+    },
+    'user.invited': e => `invited as ${e.role || 'a member'}`,
+    'user.activated': () => 'first sign-in (invitation accepted)',
+    'user.auto-admitted': () => 'first sign-in (new Requestor)',
+    'admin.bootstrapped': () => 'made Admin by the owner setup command'
+  };
+  const timeOf = at => new Date(at).toLocaleString('en-PH', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
   async function openUsers() {
     open('<div class="tagline">ADMIN</div><h2>Users</h2><p>Loading…</p>');
-    let users;
-    try { users = (await api('GET', '/api/v1/users')).users; }
-    catch (err) { return open(`<div class="tagline">ADMIN</div><h2>Users</h2><div class="banner">${esc(message(err))}</div>`); }
+    let users, usage, activity = [];
+    try {
+      const data = await api('GET', '/api/v1/users');
+      users = data.users; usage = data.usage;
+      activity = (await api('GET', '/api/v1/users/activity').catch(() => ({ activity: [] }))).activity;
+    } catch (err) {
+      open(`<div class="tagline">ADMIN</div><h2>Users</h2><div class="banner">${esc(message(err))}</div><div class="actions"><button class="secondary" id="users-retry">Try again</button></div>`);
+      document.querySelector('#users-retry').onclick = openUsers;
+      return;
+    }
     const rows = users.map(u => {
-      const self = u.email === me.email;
+      const self = u.id === me.id;
       const role = self ? esc(u.role) : `<select data-user="${esc(u.id)}" data-field="role" aria-label="Role for ${esc(u.email)}">${ROLES.map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select>`;
       // Someone who never signed in can only be invited or revoked; the server keeps them "invited" until they sign in.
       const enabledLabel = u.linked ? 'Active' : 'Invited (not signed in yet)';
       const disabledLabel = u.linked ? 'Disabled' : 'Invitation revoked';
       const access = self ? 'You'
         : `<select data-user="${esc(u.id)}" data-field="status" aria-label="Access for ${esc(u.email)}"><option value="active" ${u.status !== 'disabled' ? 'selected' : ''}>${enabledLabel}</option><option value="disabled" ${u.status === 'disabled' ? 'selected' : ''}>${disabledLabel}</option></select>`;
-      return `<tr class="${self ? 'self' : ''}"><td><span class="ticket-name">${esc(u.displayName)}</span><span class="ticket-id">${esc(u.email)}</span></td><td>${role}</td><td>${access}</td></tr>`;
+      return `<tr class="${self ? 'self' : ''}"><td><span class="ticket-name">${esc(u.displayName)}</span><span class="ticket-id">${esc(u.email)}</span>${u.openAssigned ? `<span class="ticket-id">${u.openAssigned} open assigned</span>` : ''}</td><td>${role}</td><td>${access}</td></tr>`;
     }).join('');
     const policy = me.accessPolicy === 'tenant-members'
-      ? 'Beta access: every member account of the company tenant can sign in and starts as a Requestor. Guests and other organizations are refused. Invite someone here to give them a different role from their first sign-in.'
+      ? '<b>A colleague must sign in once with their company Microsoft account before their account appears here.</b> They then start as a Requestor, and you can make them a Developer or an Admin below. Guests and other organizations are refused.'
       : 'Only invited people can use JarcTech Ticket. An invitation becomes active when that person first signs in with the same Microsoft work email.';
-    open(`<div class="tagline">ADMIN</div><h2>Users</h2><p>${policy} Roles are set here, never by the sign-in itself. Disabled people cannot sign in under either policy.</p><p class="read-only">Requestor: submits and tracks own requests and confirms completion. Developer: plans and delivers the work assigned to them, and sees their own requests. Admin: every request, users and roles, assignment (to a Developer or themselves), and final closure. At least one active Admin always remains, and nobody can change their own role or access.</p>`
+    const used = usage ? Math.round(usage.bytes / usage.quotaBytes * 100) : 0;
+    const storage = usage ? `<p class="read-only${used >= 80 ? ' storage-warning' : ''}" id="attachment-usage">Attachment storage: ${esc(AttachmentRules.formatSize(usage.bytes))} of ${esc(AttachmentRules.formatSize(usage.quotaBytes))} (${usage.files} file${usage.files === 1 ? '' : 's'}).${used >= 80 ? ' Nearly full: new uploads will be refused at the limit.' : ''}</p>` : '';
+    const log = activity.length ? `<details class="activity-feed" id="account-activity"><summary>Recent account changes</summary>${activity.map(e => `<div class="notice">${esc(e.subject || 'An account')}: ${esc((ACTIVITY[e.type] || (() => e.type))(e))}<small>${esc(timeOf(e.at))}${e.actor ? ` · by ${esc(e.actor)}` : ''}</small></div>`).join('')}</details>` : '';
+    open(`<div class="tagline">ADMIN</div><h2>Users</h2><p>${policy} Roles are set here, never by the sign-in itself. Disabled people cannot sign in.</p><p class="read-only">Requestor: submits and tracks own requests and confirms completion. Developer: plans and delivers the work assigned to them, and sees their own requests. Admin: every request, users and roles, assignment (to a Developer or themselves), and final closure. At least one active Admin always remains, and nobody can change their own role or access. Changes apply at once and are recorded.</p>${storage}`
       + `
       <div class="table-wrap"><table class="users-table"><thead><tr><th>Person</th><th>Role</th><th>Access</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <h3>Invite someone</h3><form id="invite-form"><div class="field-grid"><label class="full">Work email *<input name="email" type="email" required autocomplete="off"></label><label>Display name<input name="displayName" maxlength="120"></label><label>Role *<select name="role" required>${ROLES.map(r => `<option>${r}</option>`).join('')}</select></label></div><div class="actions"><button class="primary">Send invitation</button></div></form>`);
-    document.querySelectorAll('[data-user]').forEach(select => select.onchange = async () => {
-      try { await api('PATCH', `/api/v1/users/${select.dataset.user}`, { [select.dataset.field]: select.value }); toast('User updated'); }
-      catch (err) { toast(message(err)); }
-      openUsers();
+      <div id="user-confirm" class="banner" role="status" hidden></div>
+      ${log}
+      <h3>Invite someone before their first sign-in (optional)</h3><p class="read-only">Use this only to give someone a role from their very first sign-in. No email is sent: let them know, and they sign in with this same work email.</p><form id="invite-form"><div class="field-grid"><label class="full">Work email *<input name="email" type="email" required autocomplete="off"></label><label>Display name<input name="displayName" maxlength="120"></label><label>Role *<select name="role" required>${ROLES.map(r => `<option>${r}</option>`).join('')}</select></label></div><div class="actions"><button class="primary">Save invitation</button></div></form>`);
+    // A role or access change takes effect at once, so it is confirmed first.
+    document.querySelectorAll('[data-user]').forEach(select => select.onchange = () => {
+      const u = users.find(x => x.id === select.dataset.user), field = select.dataset.field, value = select.value;
+      const box = document.querySelector('#user-confirm');
+      const label = field === 'role' ? `make ${esc(u.displayName)} ${value === 'Admin' ? 'an' : 'a'} ${esc(value)}` : value === 'disabled' ? `turn off access for ${esc(u.displayName)}` : `restore access for ${esc(u.displayName)}`;
+      box.hidden = false;
+      box.innerHTML = `<p><b>Confirm: ${label}?</b> ${esc(changeImpact(u, field, value))}</p><div class="actions"><button class="primary" id="user-confirm-yes">Confirm change</button><button class="secondary" id="user-confirm-no">Cancel</button></div>`;
+      box.querySelector('#user-confirm-no').onclick = openUsers;
+      box.querySelector('#user-confirm-yes').onclick = async () => {
+        box.querySelector('#user-confirm-yes').disabled = true;
+        try { await api('PATCH', `/api/v1/users/${select.dataset.user}`, { [field]: value }); toast('User updated'); }
+        catch (err) { toast(message(err)); }
+        openUsers();
+      };
+      box.scrollIntoView({ block: 'center' });
+      box.querySelector('#user-confirm-yes').focus();
     });
     $('#invite-form').onsubmit = async e => {
       e.preventDefault();

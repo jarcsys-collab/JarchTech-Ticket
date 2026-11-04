@@ -12,7 +12,7 @@ const { GridFSBucket, ObjectId } = require('mongodb');
 const Rules = require('../../public/attachment-rules.js');
 
 const BUCKET = 'beta_files';
-const WORKSPACE_QUOTA_BYTES = 200 * 1024 * 1024; // per workspace, all files together, to stay well inside the database plan
+const WORKSPACE_QUOTA_BYTES = 200 * 1024 * 1024; // default per workspace, all files together (ATTACHMENT_QUOTA_MB changes it)
 const MAX_PENDING_PER_USER = 20;
 const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
 const SWEEP_EVERY_MS = 10 * 60 * 1000;
@@ -71,7 +71,7 @@ function disposition(name) {
 
 // names: { attachments, bucket, tickets } collection names. canSeeTicket(actor, ticketId) decides who may download
 // an attached file; uploads that are not yet part of a ticket are only ever the uploader's.
-function createAttachments({ db, workspace, names = { attachments: 'beta_attachments', bucket: BUCKET, tickets: 'beta_tickets' }, canSeeTicket = async () => true, log = console, now = () => new Date() }) {
+function createAttachments({ db, workspace, names = { attachments: 'beta_attachments', bucket: BUCKET, tickets: 'beta_tickets' }, canSeeTicket = async () => true, log = console, now = () => new Date(), quotaBytes = WORKSPACE_QUOTA_BYTES }) {
   const files = db.collection(names.attachments);
   const bucket = new GridFSBucket(db, { bucketName: names.bucket });
   const fileDocs = db.collection(`${names.bucket}.files`), chunks = db.collection(`${names.bucket}.chunks`);
@@ -100,7 +100,7 @@ function createAttachments({ db, workspace, names = { attachments: 'beta_attachm
       throw new AttachmentError(429, 'too-many-pending', 'You have too many uploads that are not yet part of a ticket. Submit or remove them first.');
     }
     const [usage] = await files.aggregate([{ $match: { workspace } }, { $group: { _id: null, bytes: { $sum: '$size' } } }]).toArray();
-    if ((usage?.bytes || 0) + (declared || 0) > WORKSPACE_QUOTA_BYTES) {
+    if ((usage?.bytes || 0) + (declared || 0) > quotaBytes) {
       throw new AttachmentError(507, 'quota-exceeded', 'This workspace has reached its attachment storage limit. Ask an Admin for help.');
     }
 
@@ -156,7 +156,7 @@ function createAttachments({ db, workspace, names = { attachments: 'beta_attachm
     if (req.method === 'HEAD') return res.end();
     await new Promise(resolve => {
       const source = bucket.openDownloadStream(doc._id);
-      source.on('error', err => { log.error(`Beta attachment ${id} could not be read: ${err.name}`); res.destroy(); resolve(); });
+      source.on('error', err => { log.error(`Attachment ${id} could not be read: ${err.name}`); res.destroy(); resolve(); });
       res.on('close', () => { source.destroy(); resolve(); });
       source.pipe(res);
     });
@@ -217,7 +217,7 @@ function createAttachments({ db, workspace, names = { attachments: 'beta_attachm
   function sweepSoon() {
     if (Date.now() - lastSweep < SWEEP_EVERY_MS) return;
     lastSweep = Date.now();
-    sweep().catch(err => log.error(`Beta attachment cleanup failed: ${err.name}`));
+    sweep().catch(err => log.error(`Attachment cleanup failed: ${err.name}`));
   }
 
   // Beta reset: deletes every attachment record of this workspace and every file in its bucket. Nothing else.
@@ -229,7 +229,13 @@ function createAttachments({ db, workspace, names = { attachments: 'beta_attachm
     return { removed: ids.length };
   }
 
-  return { upload, download, remove, claim, finish, release, sweep, sweepSoon, reset };
+  // Storage in use, for the Admin's Users screen.
+  async function usage() {
+    const [u] = await files.aggregate([{ $match: { workspace } }, { $group: { _id: null, bytes: { $sum: '$size' }, files: { $sum: 1 } } }]).toArray();
+    return { bytes: u ? u.bytes : 0, files: u ? u.files : 0, quotaBytes };
+  }
+
+  return { upload, download, remove, claim, finish, release, sweep, sweepSoon, reset, usage };
 }
 
 module.exports = { AttachmentError, BUCKET, MAX_PENDING_PER_USER, PENDING_TTL_MS, WORKSPACE_QUOTA_BYTES, createAttachments, disposition, inspector };

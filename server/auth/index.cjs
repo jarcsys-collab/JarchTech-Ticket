@@ -1,6 +1,8 @@
 // Microsoft Entra sign-in routes, server-side sessions, the signed-in API, and the gate in front of the app.
 // Any sign-in problem ends on an error or access-denied page; there is no fallback to demo mode.
-const { HttpError, cookie, parseCookies, readJson, redirect, sameOrigin, sendHtml, sendJson } = require('../http.cjs');
+const crypto = require('node:crypto');
+const { HttpError, contentSecurityPolicy, cookie, parseCookies, readJson, redirect, sameOrigin, sendHtml, sendJson } = require('../http.cjs');
+const { clientAddress, createLimits } = require('../limits.cjs');
 const { redact } = require('../redact.cjs');
 const { createOidc } = require('./oidc.cjs');
 const { pages } = require('./pages.cjs');
@@ -15,13 +17,16 @@ const PUBLIC_ASSETS = new Set(['/style.css']); // used by the sign-in pages befo
 const USER_PATH = /^\/api\/v1\/users\/([0-9a-f]{24})$/;
 
 // settings: due-date settings (config.reminders); email: config.email (only whether it is enabled is used here).
-function createAuth(auth, { database, log = console, oidc: oidcOptions, now, settings, email = { enabled: false } } = {}) {
+function createAuth(auth, { database, log = console, oidc: oidcOptions, now, settings, email = { enabled: false }, limits: limitSettings = {}, deployed = false } = {}) {
   const store = createStore(database.db(), { now });
+  const limits = createLimits({ enabled: limitSettings.rate === true });
+  const attachmentQuotaBytes = limitSettings.attachmentQuotaBytes;
+  const limited = (req, res, hit) => { sendJson(req, res, 429, { error: 'rate-limited', message: hit.message }, { 'Retry-After': String(hit.retryAfter), ...(req.complete ? {} : { Connection: 'close' }) }); return true; };
   const recordEvent = (type, details) => store.record(type, details);
   // My workspace: real tickets with access from the signed-in account's role and ownership.
-  const work = createWork({ db: database.db(), log, now: now || (() => new Date()), recordEvent, settings });
+  const work = createWork({ db: database.db(), log, now: now || (() => new Date()), recordEvent, settings, attachmentQuotaBytes });
   // Shared beta simulation workspace, only when BETA_SIMULATION=enabled. Reset events go to the audit log.
-  const beta = auth.beta ? createBeta({ db: database.db(), log, now: now || (() => new Date()), recordEvent, settings }) : null;
+  const beta = auth.beta ? createBeta({ db: database.db(), log, now: now || (() => new Date()), recordEvent, settings, attachmentQuotaBytes }) : null;
   const oidc = createOidc(auth, oidcOptions);
   const secure = auth.secureCookies;
   const SESSION = secure ? '__Host-jt_session' : 'jt_session';
@@ -100,6 +105,9 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
     if (!user) return sendJson(req, res, 401, { error: 'sign-in-required' });
     const write = !['GET', 'HEAD'].includes(req.method);
     if (write && !sameOrigin(req, auth.baseUrl)) return sendJson(req, res, 403, { error: 'cross-origin' });
+    const upload = req.method === 'POST' && /\/attachments$/.test(pathname);
+    const hit = limits.take(upload ? 'upload' : write ? 'write' : 'read', String(user._id));
+    if (hit) return limited(req, res, hit);
     // The beta workspace: any signed-in member, simulated view per request, beta collections only.
     if (pathname === '/api/v1/beta' || pathname.startsWith('/api/v1/beta/')) {
       if (!beta) return sendJson(req, res, 404, { error: 'not-found' });
@@ -121,10 +129,11 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
       return sendJson(req, res, 200, { emailReminders: user.emailReminders === true, emailDelivery: email.enabled ? 'enabled' : 'disabled' });
     }
     const userMatch = USER_PATH.exec(pathname);
-    if (pathname !== '/api/v1/users' && !userMatch) return sendJson(req, res, 404, { error: 'not-found' });
+    if (pathname !== '/api/v1/users' && pathname !== '/api/v1/users/activity' && !userMatch) return sendJson(req, res, 404, { error: 'not-found' });
     // User and role management belongs to Admins only. Developers and Requestors are refused.
     if (user.role !== 'Admin') return sendJson(req, res, 403, { error: 'admin-only' });
-    if (pathname === '/api/v1/users' && !write) return sendJson(req, res, 200, { users: await store.listUsers() });
+    if (pathname === '/api/v1/users/activity') return write ? sendJson(req, res, 405, { error: 'method-not-allowed' }) : sendJson(req, res, 200, { activity: await store.auditLog() });
+    if (pathname === '/api/v1/users' && !write) return sendJson(req, res, 200, { users: await store.listUsers(), usage: await work.usage() });
     if (pathname === '/api/v1/users' && req.method === 'POST') {
       const body = await readJson(req);
       return sendJson(req, res, 201, { user: await store.inviteUser({ email: body?.email, role: body?.role, displayName: body?.displayName }, user) });
@@ -141,6 +150,10 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
   // Handles /auth/* and /api/v1/*. Returns false for other paths.
   async function handle(req, res, pathname) {
     try {
+      if (pathname === '/auth/login' || pathname === '/auth/callback') {
+        const hit = limits.take('signin', clientAddress(req, { trustProxy: deployed }));
+        if (hit) { sendHtml(req, res, 429, pages.tooMany(), { 'Retry-After': String(hit.retryAfter) }); return true; }
+      }
       if (pathname === '/auth/login' && req.method === 'GET') { await login(req, res); return true; }
       if (pathname === '/auth/callback' && req.method === 'GET') { await callback(req, res); return true; }
       if (pathname === '/auth/logout' && req.method === 'POST') { await logout(req, res); return true; }
@@ -153,9 +166,10 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
       if (pathname.startsWith('/api/')) { await api(req, res, pathname); return true; }
       return false;
     } catch (err) {
-      if (err instanceof HttpError || err instanceof StoreError) { sendJson(req, res, err.status, { error: err.code }); return true; }
+      if (err instanceof HttpError || err instanceof StoreError) { sendJson(req, res, err.status, { error: err.code }, req.complete ? {} : { Connection: 'close' }); return true; }
       log.error(`Request failed: ${describe(err)}`);
-      if (!res.headersSent) sendJson(req, res, 500, { error: 'server-error' });
+      // A sign-in page is a browser navigation, so it gets a page rather than JSON (database unreachable, for example).
+      if (!res.headersSent) { if (pathname.startsWith('/auth/')) sendHtml(req, res, 503, pages.unavailable()); else sendJson(req, res, 500, { error: 'server-error' }); }
       return true;
     }
   }
@@ -165,13 +179,15 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
   async function gate(req, res, pathname) {
     if (PUBLIC_ASSETS.has(pathname)) return { public: true };
     const user = await currentUser(req);
+    // Sample data and the preview exist only in local and test configurations; the official deployment does not serve them.
+    if (user && ((pathname === '/inspection.js' && !auth.inspection) || (pathname === '/sample-data.js' && !auth.inspection))) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); res.end('Not found'); return null; }
     if (user) return { user, page: { accessPolicy: auth.accessPolicy, inspection: auth.inspection === true, beta: auth.beta === true, deadlines: { timezone: (settings && settings.timezone) || 'Asia/Manila', dueSoonDays: settings ? settings.dueSoonDays : 2 }, email: email.enabled === true } };
     if (pathname === '/' || pathname.endsWith('.html')) redirect(res, '/auth/signin');
     else { res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); res.end('Sign in required'); }
     return null;
   }
 
-  return { handle, gate, store, cookieName: SESSION, beta: Boolean(beta), engines: { work, beta } };
+  return { handle, gate, store, cookieName: SESSION, beta: Boolean(beta), engines: { work, beta }, secure, formOrigins: [oidc.origin] };
 }
 
 // Adds the signed-in user's display details to index.html. Values are JSON with < escaped, so they cannot end the script.
@@ -179,12 +195,22 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
 // With inspection enabled, inspection.js loads before the app so it can switch the app to isolated sample storage.
 // workspace-store.js (My workspace, or the beta simulation when chosen) loads before the app, and
 // workspace-features.js (notifications, attachments, deadlines) after everything else.
-function injectSession(html, user, { accessPolicy = 'invite-only', inspection = false, beta = false, deadlines = { timezone: 'Asia/Manila', dueSoonDays: 2 }, email = false } = {}) {
+// In the official configuration (no beta simulation, no inspection) the page has no role selector, no sample data, and
+// none of the browser-only prototype's labels. nonce: allows the one inline script below under the page's CSP.
+function injectSession(html, user, { accessPolicy = 'invite-only', inspection = false, beta = false, deadlines = { timezone: 'Asia/Manila', dueSoonDays: 2 }, email = false, nonce = '' } = {}) {
   const data = JSON.stringify({ id: String(user._id), displayName: user.displayName || user.email, email: user.email, role: user.role, accessPolicy, inspection, beta, deadlines, emailDelivery: email ? 'enabled' : 'disabled' }).replace(/</g, '\\u003c');
-  const before = `<script>window.JARC_SESSION=Object.freeze(${data});</script>${inspection ? '<script src="inspection.js"></script>' : ''}<script src="workspace-store.js"></script>`;
-  return html
+  const before = `<script${nonce ? ` nonce="${nonce}"` : ''}>window.JARC_SESSION=Object.freeze(${data});</script>${inspection ? '<script src="inspection.js"></script>' : ''}<script src="workspace-store.js"></script>`;
+  const page = html
+    .replace('<span class="live-dot"></span> Local prototype<small>Changes saved in this browser</small>', '<span class="live-dot"></span> My workspace<small>Saved on the server · access from your account</small>')
+    .replace('<span class="save"><i></i> Saved locally</span>', '<span class="save"><i></i> Saved</span>')
+    .replace('<span class="avatar">AV</span>', '<span class="avatar"></span>');
+  const shaped = inspection ? page : page.replace('<script src="sample-data.js"></script>', '');
+  const official = inspection || beta ? shaped : shaped.replace(/<label class="demo-role-label">.*?<\/label>/, '');
+  return official
     .replace('<script src="timeline-core.js"></script>', `${before}<script src="timeline-core.js"></script>`)
     .replace('</body>', '<script src="auth-client.js"></script><script src="workspace-features.js"></script></body>');
 }
 
-module.exports = { createAuth, injectSession };
+const sessionNonce = () => crypto.randomBytes(16).toString('base64');
+
+module.exports = { contentSecurityPolicy, createAuth, injectSession, sessionNonce };

@@ -7,6 +7,7 @@
 // The assigned worker (devId) is a Developer, or an Admin who assigned the work to themselves; they receive the
 // delivery reminders. A member acts in each capacity they hold on a ticket: their role, and Requestor as its owner.
 // Beta simulation views and sample people never apply here. The request handling is server/workspace/engine.cjs.
+const { ObjectId } = require('mongodb');
 const { WORK_COLLECTIONS } = require('../schema.cjs');
 const { sendJson } = require('../http.cjs');
 const { createWorkspace } = require('../workspace/engine.cjs');
@@ -14,7 +15,7 @@ const { accounts } = require('../workspace/notifications.cjs');
 
 const WORKSPACE = 'main';
 
-function createWork({ db, log = console, now = () => new Date(), recordEvent = async () => {}, settings }) {
+function createWork({ db, log = console, now = () => new Date(), recordEvent = async () => {}, settings, attachmentQuotaBytes }) {
   const users = db.collection('users');
   const uidOf = user => String(user._id);
   const nameOf = user => user.displayName || user.email;
@@ -32,6 +33,19 @@ function createWork({ db, log = console, now = () => new Date(), recordEvent = a
     return user.role === 'Developer' ? activeDevelopers() : [];
   }
 
+  // For Admins: accounts that cannot act on a request any more, so the screens can say what needs reassigning or review.
+  async function accountFlags(user) {
+    if (!admin(user)) return {};
+    const flagged = await users.find({ $or: [{ status: { $ne: 'active' } }, { role: 'Requestor' }] }, { projection: { status: 1 } }).toArray();
+    return { cannotWork: flagged.map(u => String(u._id)), disabled: flagged.filter(u => u.status !== 'active').map(u => String(u._id)) };
+  }
+  // The Requestor's account is disabled: nobody can confirm for them, so an Admin other than the worker reviews instead.
+  async function requesterGone(ticket) {
+    if (!ticket.requester || !/^[0-9a-f]{24}$/.test(String(ticket.requester.id))) return false;
+    const owner = await users.findOne({ _id: new ObjectId(ticket.requester.id) }, { projection: { status: 1 } });
+    return !owner || owner.status !== 'active';
+  }
+
   const policy = {
     label: 'My workspace',
     workspace: WORKSPACE,
@@ -47,13 +61,21 @@ function createWork({ db, log = console, now = () => new Date(), recordEvent = a
     canSee: async (user, t) => admin(user) || assigned(user, t) || owns(user, t),
     async contexts(user, ticket) {
       const people = await assignees(user);
+      const gone = admin(user) && await requesterGone(ticket);
+      // The current worker stays selectable while eligible (another Admin who assigned it to themselves, for example),
+      // so an Admin can change the priority without reassigning the work.
+      const keeps = admin(user) && ticket.devId && /^[0-9a-f]{24}$/.test(ticket.devId) && await users.findOne({ _id: new ObjectId(ticket.devId), status: 'active', role: { $in: ['Admin', 'Developer'] } }, { projection: { _id: 1 } });
       const common = {
         actorFor: () => ({ id: uidOf(user), name: nameOf(user) }),
         isRequester: t => owns(user, t),
         isWorker: t => assigned(user, t),
         // The Requestor and the worker are the same account: an Admin must review for the Requestor side.
-        sameParty: t => Boolean(t.devId && t.requester && t.requester.id === t.devId),
-        assignee: id => { const d = admin(user) && people.find(x => x.id === String(id)); return d ? { dev: d.name, devId: d.id } : null; },
+        sameParty: t => gone || Boolean(t.devId && t.requester && t.requester.id === t.devId),
+        assignee: id => {
+          if (keeps && String(id) === ticket.devId) return { dev: ticket.dev, devId: ticket.devId };
+          const d = admin(user) && people.find(x => x.id === String(id));
+          return d ? { dev: d.name, devId: d.id } : null;
+        },
         assigneeError: 'Choose an active Developer, or assign it to yourself.',
         owners: [...new Set([...people.map(d => d.name), ...(ticket.dev ? [ticket.dev] : [])])]
       };
@@ -63,14 +85,14 @@ function createWork({ db, log = console, now = () => new Date(), recordEvent = a
       return out;
     },
     creationView: () => 'Requestor',
-    extras: async user => ({ developers: await assignees(user) }),
+    extras: async user => ({ developers: await assignees(user), ...await accountFlags(user) }),
     async routes(req, res, pathname, user) {
       if (pathname !== '/api/v1/work/people' || !['GET', 'HEAD'].includes(req.method)) return false;
       sendJson(req, res, 200, await policy.extras(user));
       return true;
     }
   };
-  return createWorkspace({ db, policy, log, now, recordEvent, settings });
+  return createWorkspace({ db, policy, log, now, recordEvent, settings, attachmentQuotaBytes });
 }
 
 module.exports = { WORKSPACE, createWork };

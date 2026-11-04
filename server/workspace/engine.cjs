@@ -9,6 +9,10 @@
 //   follow ticket access. Evidence files come only from the caller's own claimed uploads, never from the request body.
 // - Saved actions notify the inboxes involved; search reads the records the member may see, page by page.
 // - Records that a member may not see answer "not found", in every route (lists, search, details, files, actions).
+// - A change that affects its request (approval, release, closure) is saved with a pendingEffect describing that effect.
+//   The request then records the effect's key in appliedEffects in the same write that applies it, so it happens exactly
+//   once. If the process stops in between, the effect is finished before anything else touches that request, and by the
+//   scheduler otherwise, so a request can never move on (or close) with an approved change half applied.
 const WorkflowCore = require('../../public/workflow-core.js');
 const TL = require('../../public/timeline-core.js');
 const ListFilter = require('../../public/list-filter.js');
@@ -27,7 +31,7 @@ class Conflict extends Error {
 }
 
 // policy: see server/beta/index.cjs and server/work/index.cjs. settings: deadline settings (timezone, dueSoonDays).
-function createWorkspace({ db, policy, log = console, now = () => new Date(), recordEvent = async () => {}, settings = DeadlineCore.DEFAULTS }) {
+function createWorkspace({ db, policy, log = console, now = () => new Date(), recordEvent = async () => {}, settings = DeadlineCore.DEFAULTS, attachmentQuotaBytes }) {
   const WORKSPACE = policy.workspace;
   const names = policy.names;
   const base = policy.base.replace(/[/]/g, '\\/');
@@ -40,12 +44,18 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   const tickets = db.collection(names.tickets);
   const changes = db.collection(names.changes);
   const files = createAttachments({
-    db, workspace: WORKSPACE, log, now,
+    db, workspace: WORKSPACE, log, now, quotaBytes: attachmentQuotaBytes,
     names: { attachments: names.attachments, bucket: names.bucket, tickets: names.tickets },
     canSeeTicket: async (actor, id) => { const t = id && await tickets.findOne({ workspace: WORKSPACE, id }); return Boolean(t && await policy.canSee(actor, t, null, 'download')); }
   });
-  const notify = createNotifications({ db, workspace: WORKSPACE, collection: names.notifications, addressing: policy.addressing, log, stamp });
-  const toClient = ({ _id, workspace, requestId, ...rest }) => rest;
+  // Simulated inboxes follow the simulated view; real accounts see a notification's text only while they may see its ticket.
+  const readable = policy.simulated ? null : async (user, docs) => {
+    const ids = [...new Set(docs.map(d => d.ticket).filter(Boolean))];
+    return new Set((await tickets.find({ workspace: WORKSPACE, id: { $in: ids }, ...await policy.visible(user) }, { projection: { id: 1 } }).toArray()).map(t => t.id));
+  };
+  const notify = createNotifications({ db, workspace: WORKSPACE, collection: names.notifications, addressing: policy.addressing, log, stamp, readable });
+  const toClient = ({ _id, workspace, requestId, pendingEffect, appliedEffects, ...rest }) => rest;
+  const faults = { beforeEffect: null }; // tests only: simulates the process stopping between the two saves
   const entry = (text, actor, view, at, attachments) => ({ text, time: stamp(at), at, actor: actor.displayName || actor.email, actorId: String(actor._id), view, ...(attachments ? { attachments } : {}) });
   const withFiles = (text, claimed) => claimed ? `${text} (${claimed.list.length} attachment${claimed.list.length === 1 ? '' : 's'})` : text;
   const notFound = () => new HttpError(404, 'not-found');
@@ -156,7 +166,46 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     return { created: doc.id, duplicate, tickets: [toClient(doc)] };
   }
 
+  // Finishes one saved change's effect on its request. Exactly once: the key is written with the effect, and a write
+  // only succeeds on the version it read. Then clears the change's marker.
+  async function finishEffect(change) {
+    const { key, effect, actor, view, at: when } = change.pendingEffect;
+    const at = new Date(when);
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const ticket = await tickets.findOne({ workspace: WORKSPACE, id: change.ticket });
+      if (!ticket) { log.error(`${policy.label}: ${change.id} refers to a missing request ${change.ticket}.`); return false; }
+      if ((ticket.appliedEffects || []).includes(key)) break;
+      const next = clone(ticket);
+      const notes = WorkflowCore.applyChangeEffect(change, next, effect, { view, time: () => stamp(at) });
+      next.appliedEffects = [...(ticket.appliedEffects || []), key];
+      next.history.push(...notes.map(n => entry(n, { _id: actor.id, displayName: actor.name }, view, at)));
+      if (await replaceIfCurrent(tickets, ticket, next, at)) {
+        await changes.updateOne({ _id: change._id, 'pendingEffect.key': key }, { $unset: { pendingEffect: '' } });
+        return true;
+      }
+      await new Promise(r => setTimeout(r, Math.random() * 40 * (attempt + 1)));
+    }
+    const applied = await tickets.findOne({ workspace: WORKSPACE, id: change.ticket, appliedEffects: key }, { projection: { _id: 1 } });
+    if (applied) { await changes.updateOne({ _id: change._id, 'pendingEffect.key': key }, { $unset: { pendingEffect: '' } }); return true; }
+    log.error(`${policy.label}: ${change.id} is waiting to update request ${change.ticket}; it will be retried.`);
+    return false;
+  }
+  // Runs before any action on a request or its changes. Returns false if an effect could not be finished yet.
+  async function settle(ticketId) {
+    for (const change of await changes.find({ workspace: WORKSPACE, ticket: ticketId, pendingEffect: { $exists: true } }).toArray()) {
+      if (!await finishEffect(change)) throw new WorkflowCore.WorkflowError('state', 'This request is finishing an earlier update. Try again in a moment.');
+    }
+  }
+  // Scheduler and startup: finishes anything left by an interrupted save, even if nobody opens the request.
+  async function recoverEffects() {
+    let finished = 0;
+    for (const change of await changes.find({ workspace: WORKSPACE, pendingEffect: { $exists: true } }).toArray()) if (await finishEffect(change)) finished++;
+    if (finished) log.log(`${policy.label}: finished ${finished} interrupted scope change update(s).`);
+    return finished;
+  }
+
   async function ticketAction(actor, id, body) {
+    await settle(id);
     const current = await visibleTicket(actor, id, body.view);
     if (body.version !== current.version) throw await conflict('tickets', id);
     const at = now();
@@ -169,6 +218,12 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     try {
       if (body.action === 'add-evidence') input.files = claimed ? claimed.list : [];
       if (body.action === 'comment' && claimed && !String(input.comment || '').trim()) input.comment = `Shared ${claimed.list.length} attachment${claimed.list.length === 1 ? '' : 's'}.`;
+      // A linked scope change still open must be decided before the request can close: otherwise an approved change
+      // could add work to, or be left stranded on, a closed request.
+      if (body.action === 'status' && (body.input || {}).status === 'Closed') {
+        const open = await changes.findOne({ workspace: WORKSPACE, ticket: id, status: { $nin: WorkflowCore.CHANGE_SETTLED } }, { projection: { id: 1 } });
+        if (open) throw new WorkflowCore.WorkflowError('state', `Scope change ${open.id} is still open. Finish, defer, or reject it before closing this request.`);
+      }
       ({ ctx, next } = tryAs(contexts, c => {
         const copy = clone(current);
         const notes = WorkflowCore.ticketAction(copy, body.action, input, c);
@@ -185,6 +240,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
 
   async function createChange(actor, ticketId, body) {
     if (!REQUEST_ID.test(String(body.requestId || ''))) throw new HttpError(400, 'invalid-request-id');
+    await settle(ticketId);
     const ticket = await visibleTicket(actor, ticketId, body.view);
     const prior = await changes.findOne({ workspace: WORKSPACE, requestId: body.requestId });
     if (prior) {
@@ -215,7 +271,9 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   async function changeAction(actor, id, body) {
     const current = await changes.findOne({ workspace: WORKSPACE, id });
     if (!current) throw notFound();
-    let ticket = await visibleTicket(actor, current.ticket, body.view);
+    await visibleTicket(actor, current.ticket, body.view); // says nothing about records this member may not see
+    await settle(current.ticket);
+    const ticket = await visibleTicket(actor, current.ticket, body.view);
     if (body.version !== current.version) throw await conflict('changes', id);
     const at = now();
     const contexts = await policy.contexts(actor, ticket, body);
@@ -225,17 +283,12 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
       copy.history.push(...r.notes.map(n => entry(n, actor, c.view, at)));
       return { next: copy, result: r };
     });
+    // Approval and release also update the original request: the intent is saved with the change, then carried out.
+    if (result.effect) next.pendingEffect = { key: `${id}:${current.version + 1}`, effect: result.effect, actor: { id: String(actor._id), name: actor.displayName || actor.email }, view: ctx.view, at };
     if (!await replaceIfCurrent(changes, current, next, at)) throw await conflict('changes', id);
-    // Approval and release also update the original ticket; retry briefly if the ticket was saved meanwhile.
-    if (result.ticketEffect) {
-      for (let attempt = 0; ; attempt++) {
-        const nextTicket = clone(ticket);
-        const ticketNotes = result.ticketEffect(nextTicket);
-        nextTicket.history.push(...ticketNotes.map(n => entry(n, actor, ctx.view, at)));
-        if (await replaceIfCurrent(tickets, ticket, nextTicket, at)) break;
-        if (attempt >= 4) { log.error(`${policy.label}: ${id} saved but ticket ${current.ticket} could not be updated after retries.`); break; }
-        ticket = await tickets.findOne({ _id: ticket._id });
-      }
+    if (result.effect) {
+      if (faults.beforeEffect) faults.beforeEffect();
+      await finishEffect(await changes.findOne({ _id: current._id }));
     }
     const savedChange = await changes.findOne({ _id: current._id }), savedTicket = await tickets.findOne({ _id: ticket._id });
     await notify.deliver({ events: changeEvents(savedChange, body.action, body.input || {}), record: id, kind: 'change', target: 'change', version: savedChange.version, ticket: savedTicket, text: `${id} · ${next.history[next.history.length - 1].text}`, actor, view: ctx.view, at });
@@ -307,6 +360,11 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     const range = kind === 'Overdue' ? { $lt: today } : { $gte: today, $lte: DeadlineCore.addDays(today, settings.dueSoonDays) };
     return { status: { $in: DeadlineCore.DELIVERY }, $or: [{ dueDate: { $type: 'string', $ne: '', ...range } }, { dueDate: { $exists: false }, project: { $type: 'string' }, date: { $type: 'string', ...range } }] };
   }
+  // A record that would break a stored limit is refused with a clear message instead of failing as a server error.
+  const translateWriteError = err => {
+    if (err && err.code === 121) return new WorkflowCore.WorkflowError('state', 'This record has reached its size limit (activity entries or tasks). Ask an Admin for help.');
+    return err;
+  };
   async function getTicket(user, id, view) {
     const t = await visibleTicket(user, id, view);
     return { tickets: [toClient(t)], changes: (await changes.find({ workspace: WORKSPACE, ticket: id }).toArray()).map(toClient) };
@@ -351,7 +409,8 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
       else if (at('/notifications/read')) return sendJson(req, res, 200, await notify.markRead(user, body));
       else return sendJson(req, res, 404, { error: 'not-found' });
       return sendJson(req, res, result.created && !result.duplicate ? 201 : 200, { ...result, notices: await notices(await policy.visible(user, body.view)), ...(at('/reset') ? await workspace(user, body.view) : {}) });
-    } catch (err) {
+    } catch (caught) {
+      const err = translateWriteError(caught);
       if (err instanceof AttachmentError) {
         // An upload refused part-way may leave unread request data; close the connection rather than read it all.
         return sendJson(req, res, err.status, { error: err.code, message: err.message }, req.complete ? {} : { Connection: 'close' });
@@ -359,6 +418,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
       if (err instanceof Conflict) return sendJson(req, res, 409, { error: 'conflict', message: err.message, ...err.payload });
       if (err instanceof WorkflowCore.WorkflowError) {
         const status = { forbidden: 403, invalid: 400, state: 409 }[err.code] || 400;
+        if (!req.complete) return sendJson(req, res, status, { error: err.code, message: err.message }, { Connection: 'close' });
         return sendJson(req, res, status, { error: err.code, message: err.message });
       }
       throw err;
@@ -373,7 +433,9 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     return ts.map(t => ({ ticket: t, changes: cs.filter(c => c.ticket === t.id) }));
   };
 
-  return { handle, workspace, files, notify, scan, policy, seed: options => policy.reset && policy.reset.seed(db, { now, ...options }) };
+  const usage = () => files.usage();
+
+  return { handle, workspace, files, notify, scan, policy, usage, recoverEffects, faults, seed: options => policy.reset && policy.reset.seed(db, { now, ...options }) };
 }
 
 module.exports = { Conflict, createWorkspace };

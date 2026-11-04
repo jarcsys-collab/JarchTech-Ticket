@@ -1,8 +1,13 @@
 # JarcTech Ticket
 
-A working local prototype for JARC Technologies ticket intake, admin assignment, developer planning, and shared project Gantt tracking.
+Request, project, and delivery tracking for JARC Technologies: ticket intake, Admin assignment, developer planning, project Gantt tracking, and dual-confirmation closure.
 
-## Start here
+**Official app:** https://jarctech-ticket-production.up.railway.app (sign in with a company Microsoft account).
+**Operating it** (backups, rollback, remaining risks, Admin onboarding): [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+The official deployment always runs with Microsoft sign-in and the server-stored workspace. Everything below about the browser-only demo, the beta simulation, and inspection applies to local and test configurations only: a deployed server refuses to start with them.
+
+## Run it locally
 
 1. Extract this ZIP. Open the folder containing this README and `package.json`.
 2. Install Node.js 22 or newer if needed.
@@ -33,6 +38,7 @@ Use the URL printed in your terminal. Stop the server with Ctrl+C.
 - Developer: Assigned work shows the work assigned to them (and their own requests): meetings, agreements, timelines, tasks, evidence, and their completion confirmation.
 - Two-step project timeline from the locked agreement: project name and delivery target, then dated tasks.
 - Completion proof and two confirmations: the worker adds evidence (files or links) and marks the work done; the Requestor confirms independently; only then can an Admin close it.
+- Guided next actions: a **Needs your action** home (Admins see separate queues for administrative reviews and their own assigned work), and on every request a next-step panel (the action, who takes it, why, and one primary button), a short progress tracker, the current working section, and the supporting sections one click away. See [Guided next actions](#guided-next-actions).
 - Projects list opens a Gantt chart with task dates, owner, requirement, task criteria, and completion.
 - Linked scope changes remain inside each ticket and retain assessment, agreement, approval, testing, acceptance, release, and closure.
 - Browser-local persistence, sample data, syntax checks, date tests, static server tests, backend foundation tests, and a GitHub Actions check.
@@ -45,9 +51,9 @@ Read [the Windows setup guide](docs/GETTING-STARTED.md), then [the phased build 
 
 **Extract the ZIP before adding code to GitHub. Upload or commit its contents, not the ZIP itself.** The repository root should contain `package.json`, `server.cjs`, `CLAUDE.md`, `public/`, and `docs/`.
 
-## Backend foundation (not used by the UI yet)
+## Backend foundation
 
-The server can connect to MongoDB and report its health, but **the UI still stores records only in the browser**. No ticket API exists yet, and nothing is read from or written to the database except a connection check (`ping`).
+The server connects to MongoDB and reports its health. Without database settings on a local machine it serves the browser-only demo, which keeps records only in the browser.
 
 - **Without database settings:** `npm start` runs exactly as the browser-only prototype.
 - **With database settings:** set `MONGODB_URI` and `MONGODB_DB_NAME` in a local `.env` (copy [`.env.example`](.env.example)) or as Railway variables, and the server checks the connection at start-up. Point local development at a development database, never production.
@@ -60,7 +66,7 @@ The server can connect to MongoDB and report its health, but **the UI still stor
 - **`.env` precedence:** settings already in the environment win over `.env`. Tests and the browser walkthrough never read `.env`; they set `NODE_ENV=test` or `JARCTECH_ENV_FILE=none`.
 - **Railway:** `railway.json` sets the start command and uses `/readyz` as the deploy health check. Nothing has been deployed.
 
-## Microsoft Entra sign-in (implemented; not yet configured with real credentials)
+## Microsoft Entra sign-in
 
 There are two modes, chosen with `AUTH_MODE`:
 
@@ -151,6 +157,20 @@ With sign-in on, **My workspace** is the main view. Its tickets, projects, comme
 - **Evidence:** files reuse the attachment storage and permissions (only the uploader's own uploads can become evidence; downloads follow ticket access and are always served as attachments). Links must be plain `http` or `https` addresses without credentials; they are shown as links that open in a new tab and are never fetched by the server.
 - **Older records:** `npm run db:migrate-request-types` classifies existing requests (linked project: Project; otherwise Ticket). Projects created before locked agreements and requests completed before dual confirmation are not given invented confirmations: details list the missing steps, and the worker and Requestor can still record them.
 
+### Guided next actions
+
+Presentation and navigation only; the workflow, permissions, and data are unchanged.
+
+- **Home:** the Tickets page starts with **Needs your action**: the requests and scope changes waiting for you, in queues by capacity (Admins: *Administrative reviews* and *Your assigned work*; Developers: *Your assigned work*; Requestors: *Needs your action*; anyone's own requests that need them). A count of requests waiting on others follows. Notifications (the bell) stay separate: they say what changed, the home says what needs you.
+- **Next-step panel** on every request and scope change: the next action, who takes it (you, or a named person and capacity), a short explanation, and one primary button. Waiting states say who acts next and that nothing is needed from you. **Show me** opens the right section, scrolls to it, and focuses the field or button.
+- **Where the guidance comes from:** `WorkflowCore.nextStep` tries the real workflow actions on a copy of the request, as the responsible party and as you, in workflow order. There is no second set of rules, and every save is still checked on the server.
+- **Request layout:** a summary, the next-step panel, a progress tracker (with states in words, not only color), then the current working section. Everything else (details, meeting, tasks, attachments, linked changes, conversation) is a labelled, collapsed group. Evidence stays in view while the Requestor reviews it, and the requirements while the agreement is confirmed. Projects use the wider two-column page.
+- **Completion and closure** are shown as separate stages (worker completion, Requestor confirmation, the release or handover for Projects, Admin closure), each with who acts, its state, and only its own buttons. The closure gates are unchanged.
+- **Forms:** required fields are marked (also for screen readers), examples are given where useful, and errors appear only after submitting: next to each field and in a summary at the top that links to the fields. Entries are kept.
+- **Updates from another session:** if a save is refused because someone else changed the request, the panel says so, keeps your typed text, and offers **Show the latest version**.
+- **Beta simulation** has amber accents and adds handoff hints ("Simulation: switch to the Requestor view to confirm the agreement", with a switch button). My workspace never suggests switching views.
+- **Keyboard and motion:** focus moves to the next-step heading when a request opens; every control is reachable with Tab; focus outlines are visible; smooth scrolling is turned off when the system asks for reduced motion.
+
 ### Due dates, reminders, and escalation
 
 - **Two dates:** the **requested target date** is the requestor's, set on the form. The **agreed delivery date** is the target the worker sets when creating a Project's timeline from the locked agreement, and it changes only through an approved scope change. Lists and details show both, with **Overdue** and **Due soon** labels and a summary of overdue, due-soon, and awaiting-decision tickets that doubles as a filter.
@@ -226,7 +246,9 @@ npm.cmd run db:migrate-request-types -- --confirm-db jarctech_ticket_dev --dry-r
 
 Then start with `npm.cmd start` and open http://localhost:4177. You'll see the sign-in page.
 
-## Railway staging
+## Railway deployment
+
+The official app runs on the Railway service first set up for staging; its database keeps the historic name `jarctech_ticket_staging`. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the current settings.
 
 Railway builds from GitHub (`jarcsys-collab/JarchTech-Ticket`, `main`) using `railway.json`:
 
@@ -290,9 +312,9 @@ npm.cmd run walkthrough
 $env:WALKTHROUGH_SCREENSHOTS = 'tmp'; npm.cmd run walkthrough
 ```
 
-### Shared beta simulation workspace (`BETA_SIMULATION=enabled`)
+### Shared beta simulation workspace (`BETA_SIMULATION=enabled`): local and test only
 
-An explicit beta capability for signed-in mode, off unless `BETA_SIMULATION=enabled`. Every signed-in beta member works in **one shared workspace labeled "Beta simulation — test data"**. Tickets, projects, dated tasks, comments, activity, and linked scope changes are **stored in MongoDB** (`beta_tickets`, `beta_changes`), so they survive refreshes, sign-out, and redeployments, and appear across browsers and devices.
+A capability for signed-in mode on a local machine, off unless `BETA_SIMULATION=enabled`, and refused when deployed. Every signed-in beta member works in **one shared workspace labeled "Beta simulation — test data"**. Tickets, projects, dated tasks, comments, activity, and linked scope changes are **stored in MongoDB** (`beta_tickets`, `beta_changes`), so they survive refreshes, sign-out, and redeployments, and appear across browsers and devices.
 
 **Simulated views:**
 - **Switching:** the header's **Simulation view** switches freely between **Requestor**, **Admin**, and **Developer**, and the choice is remembered in the browser.
@@ -356,9 +378,9 @@ npm.cmd run beta:seed -- --confirm-db <database> --replace    # replaces only th
 
 `npm.cmd run walkthrough:beta` checks all of this in a real headless browser with two separate browser contexts, a **mock** Entra provider, and a **temporary** MongoDB. `npm.cmd run walkthrough:features` does the same for attachments, notifications, and search/filters. Set `BETA_SCREENSHOTS` to save screenshots.
 
-### Beta inspection mode (`INSPECTION_MODE=enabled`)
+### Inspection mode (`INSPECTION_MODE=enabled`): local and test only
 
-An explicit beta option for signed-in mode, off unless `INSPECTION_MODE=enabled`. It lets anyone signed in try every role's workflow without changing real roles.
+An option for signed-in mode on a local machine, off unless `INSPECTION_MODE=enabled`, and refused when deployed. It lets anyone signed in try every role's workflow without changing real roles.
 
 - **Entering:** a **Preview views** button in the header offers **Requestor**, **Admin**, and **Developer**. While inspecting, the header's **Preview views** switch changes the view at any time, and a persistent **"Inspection mode — sample data"** banner offers **Exit inspection** and **Reset sample data** (with confirmation).
 - **Sample data only:** inspection runs the prototype on **sample records stored only in that browser**, under their own storage prefix (`jarc-inspection:`). Normal browser records (`jarc-helpdesk-v1`) and their recovery backups are never read or written while inspecting. The sample copy has its own recovery screen.
@@ -449,6 +471,8 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `public/list-filter.js`, `public/list-view.js` | Ticket and project list search and filters (shared rules), result count, pages, and empty, loading, and error states |
 | `public/workspace-features.js`, `public/features.css` | Notifications panel and badge, attachment uploader, deadline labels, and the attention summary (signed-in mode) |
 | `scripts/work-walkthrough.mjs` | Real-browser walkthrough of My workspace roles, ownership, assignment, dates, reminders, role changes, and simulation separation (`npm run walkthrough:work`) |
+| `scripts/guide-walkthrough.mjs` | Real-browser walkthrough of guided next actions: home queues, next-step panel, keyboard, Show me, form validation, stages, handoffs, stale updates, mobile, and reduced motion (`npm run walkthrough:guide`; `GUIDE_SCREENSHOTS=<dir>` saves screenshots) |
+| `public/guide.js` | Guided next actions: home queues, next-step panel, progress tracker, request layout, Show me, and guided form validation |
 | `scripts/beta-features-walkthrough.mjs` | Real-browser walkthrough of attachments, notifications, and search with two signed-in contexts (`npm run walkthrough:features`) |
 | `scripts/beta-seed.cjs`, `scripts/beta-walkthrough.mjs` | Explicit beta seed command (`npm run beta:seed`) and the beta real-browser walkthrough (`npm run walkthrough:beta`) |
 | `scripts/inspection-walkthrough.mjs` | Optional per-flow browser walkthrough of every workflow in inspection mode (`npm run walkthrough:inspection`) |
@@ -465,13 +489,13 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `.env.example` | Server settings with placeholders only; copy to the Git-ignored `.env` for local use |
 | `docs/reference/annotated-review.pdf` | User-supplied annotated visual reference, retained unchanged |
 
-## Prototype boundaries
+## Local demo and limits
 
 Without sign-in (the local demo), all records are in this browser's localStorage (`jarc-helpdesk-v1`), not on the server. Separate browsers, devices, hostnames, and ports have separate data. The ZIP includes code and sample data, not your browser's working records. Existing local records are preserved; tasks without dates are labeled unscheduled. Fresh demo schedules are illustrative, not agreed business commitments.
 
 If the stored records cannot be read or are missing required fields, the app opens a recovery screen instead of loading sample data. The original value is left untouched, an exact copy is saved under a `jarc-helpdesk-v1-backup-<timestamp>` key when possible, and automatic saving is paused. You can download the stored value, try again, or explicitly reset to sample data; backups are kept after a reset. If a save fails (for example, storage is full), the app warns that recent changes exist only in the open tab.
 
-With Microsoft Entra sign-in, My workspace tickets are stored on the server with server-enforced roles and ownership (see above). Calendar integration is not built, and email is optional and off by default. It is a beta: do not treat it as a production system until it has had a security review.
+With Microsoft Entra sign-in, My workspace tickets are stored on the server with server-enforced roles and ownership (see above). Calendar integration is not built, and email is optional and off by default. Remaining risks are listed in docs/OPERATIONS.md: do not treat it as a production system until it has had a security review.
 
 The current request form fields are intentionally retained. Category-specific forms await the owner's category definitions.
 

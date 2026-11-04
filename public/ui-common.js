@@ -23,10 +23,10 @@ function progress(t) { return TicketCore.progress(t); }
 function prog(t) { return `<div class="progress"><span class="track"><i style="width:${progress(t)}%"></i></span>${progress(t)}%</div>`; }
 function person(n) { return n ? `<span class="person"><span class="mini-avatar">${esc(n.split(' ').map(x => x[0]).join(''))}</span>${esc(n)}</span>` : '<span style="color:#a0abad">Unassigned</span>'; }
 
-// Download links for files attached to an activity entry (shared beta workspace). Downloads require sign-in.
+// Download links for files attached to an activity entry. Downloads require sign-in and access to the request.
 function fileLinks(list) {
   if (!list || !list.length) return '';
-  return `<ul class="file-links">${list.map(f => `<li><a href="${window.JARC_SERVER ? window.JARC_SERVER.base : '/api/v1/beta'}/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(AttachmentRules.formatSize(f.size))}</small></li>`).join('')}</ul>`;
+  return `<ul class="file-links">${list.map(f => `<li><a href="${window.JARC_SERVER ? window.JARC_SERVER.base : '/api/v1/work'}/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(AttachmentRules.formatSize(f.size))}</small></li>`).join('')}</ul>`;
 }
 
 // Agreed delivery date with an overdue or due-soon label, in the workspace timezone (Asia/Manila by default).
@@ -42,13 +42,42 @@ function dueText(t) {
 }
 
 // Side drawer dialog.
+// Keyboard focus stays inside it and returns to where it was when it closes. Text typed into a form is protected:
+// closing by accident (Esc, the X, a click outside) asks for a second try first, and leaving the page asks the browser
+// to confirm. A successful save replaces the form with open() or close(), which clears the protection.
+let dialogOpener = null, dialogDirty = false, discardArmedUntil = 0;
 function open(html) {
+  if ($('#overlay').hidden) dialogOpener = document.activeElement;
+  dialogDirty = false; discardArmedUntil = 0;
   $('#dialog-content').innerHTML = html;
   $('#dialog-content h2')?.setAttribute('id', 'dialog-title');
   $('#overlay').hidden = false;
   setTimeout(() => $('.drawer input, .drawer select, .drawer button')?.focus(), 0);
 }
-function close() { $('#overlay').hidden = true; current = null; }
-$('.close').onclick = close;
-$('#overlay').onclick = e => { if (e.target.id === 'overlay') close(); };
-document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+function close() {
+  $('#overlay').hidden = true; current = null; dialogDirty = false;
+  if (dialogOpener && dialogOpener.isConnected && dialogOpener !== document.body) dialogOpener.focus();
+  dialogOpener = null;
+}
+function requestClose() {
+  if (dialogDirty && Date.now() > discardArmedUntil) {
+    discardArmedUntil = Date.now() + 6000;
+    return toast('You have text that is not saved. Close again within a few seconds to discard it.');
+  }
+  close();
+}
+$('.close').onclick = requestClose;
+$('#overlay').onclick = e => { if (e.target.id === 'overlay') requestClose(); };
+const markDialogDirty = e => { if (e.target.closest && e.target.closest('form') && !['checkbox', 'radio'].includes(e.target.type)) dialogDirty = true; };
+$('#dialog-content').addEventListener('input', markDialogDirty);
+window.addEventListener('beforeunload', e => { if (dialogDirty && !$('#overlay').hidden) e.preventDefault(); });
+document.addEventListener('keydown', e => {
+  if ($('#overlay').hidden) return;
+  if (e.key === 'Escape') return requestClose();
+  if (e.key !== 'Tab') return;
+  const items = [...$('.drawer').querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])')].filter(el => el.offsetParent !== null);
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1], inside = $('.drawer').contains(document.activeElement);
+  if (e.shiftKey && (document.activeElement === first || !inside)) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (document.activeElement === last || !inside)) { e.preventDefault(); first.focus(); }
+});

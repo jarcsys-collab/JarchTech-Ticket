@@ -9,6 +9,8 @@ const { seedWorkspace } = require('../server/beta/index.cjs');
 const usage = 'Usage: npm run beta:seed -- --confirm-db <database-name> [--replace]';
 
 runDbCommand(usage, async (db, args, name) => {
+  // After the official release the beta records are preserved as they are.
+  if (await db.collection('events').findOne({ type: 'release.official' })) throw fail(`Refusing: ${name} is the official database, where the beta records are preserved. Seed a local test database instead.`);
   const missing = await missingSchema(db, BETA_COLLECTIONS);
   if (missing.length) throw fail(`The beta workspace collections are not set up in ${name}. Run npm run db:setup -- --confirm-db ${name} first.`);
   const result = await seedWorkspace(db, { replace: args.replace === true });

@@ -15,11 +15,12 @@ const MIN_SESSION_SECRET = 32;
 // invite-only (default): only people an Admin invited. tenant-members: every member account of the configured
 // tenant may sign in and is added as Requestor on first sign-in. Guests and other tenants are refused in both.
 const ACCESS_POLICIES = ['invite-only', 'tenant-members'];
-// Beta inspection mode: signed-in people can preview the Requestor, Admin, and Developer views on isolated sample
-// data in their own browser. It never changes their account, server role, or server data. Off unless enabled.
+// Local/test only. The official deployment runs neither of these two: a deployed server refuses to start with either
+// enabled, and so does a server whose APP_BASE_URL is not localhost (a local server pointed at a shared address).
+// Inspection mode: signed-in people preview the Requestor, Admin, and Developer views on sample data in their own browser.
 const INSPECTION_MODES = ['enabled', 'disabled'];
-// Beta simulation: one shared, server-stored test workspace where signed-in members switch freely between the
-// Requestor, Admin, and Developer views. Separate from real roles, which it never changes. Off unless enabled.
+// Simulation: one shared, server-stored test workspace where signed-in members switch freely between the Requestor,
+// Admin, and Developer views. Separate from real roles, which it never changes.
 const BETA_SIMULATION_MODES = ['enabled', 'disabled'];
 const CONSUMER_TENANT = '9188040d-6c67-4c5b-b112-36a304b66dad'; // personal Microsoft accounts
 // Due-date reminders and escalation (in-app; optionally email). Whole days, in the workspace timezone.
@@ -77,9 +78,22 @@ function loadConfig(env = process.env) {
   const auth = loadAuth(env, { deployed, port, database, problems });
   const reminders = loadReminders(env, problems);
   const email = loadEmail(env, problems);
+  const limits = loadLimits(env, { nodeEnv, deployed, problems });
 
   if (problems.length) throw new ConfigError(problems);
-  return Object.freeze({ nodeEnv, deployed, port, host, database: database && Object.freeze(database), auth: Object.freeze(auth), reminders: Object.freeze(reminders), email: Object.freeze(email) });
+  return Object.freeze({ nodeEnv, deployed, port, host, database: database && Object.freeze(database), auth: Object.freeze(auth), reminders: Object.freeze(reminders), email: Object.freeze(email), limits: Object.freeze(limits) });
+}
+
+// Abuse limits and attachment capacity. Rate limits are always on when deployed; automated tests opt in with
+// RATE_LIMITS=enabled because they sign in and save far faster than people do.
+function loadLimits(env, { nodeEnv, deployed, problems }) {
+  const raw = (env.RATE_LIMITS || '').trim();
+  if (raw && !['enabled', 'disabled'].includes(raw)) problems.push('RATE_LIMITS must be enabled or disabled.');
+  if (raw === 'disabled' && deployed) problems.push('RATE_LIMITS cannot be disabled when deployed.');
+  const quota = (env.ATTACHMENT_QUOTA_MB || '').trim();
+  const quotaMb = quota === '' ? 200 : Number(quota);
+  if (!Number.isInteger(quotaMb) || quotaMb < 1 || quotaMb > 102400) problems.push('ATTACHMENT_QUOTA_MB must be a whole number from 1 to 102400.');
+  return { rate: raw ? raw === 'enabled' : nodeEnv !== 'test', attachmentQuotaBytes: quotaMb * 1024 * 1024 };
 }
 
 function loadReminders(env, problems) {
@@ -171,6 +185,11 @@ function loadAuth(env, { deployed, port, database, problems }) {
   if (!INSPECTION_MODES.includes(inspectionMode)) problems.push('INSPECTION_MODE must be enabled or disabled.');
   const betaMode = value('BETA_SIMULATION') || 'disabled';
   if (!BETA_SIMULATION_MODES.includes(betaMode)) problems.push('BETA_SIMULATION must be enabled or disabled.');
+  // The official deployment has no simulation or preview, whatever else is configured.
+  const localOnly = () => { try { return LOCAL_HOSTS.includes(new URL(value('APP_BASE_URL')).hostname); } catch { return false; } };
+  for (const [name, setting] of [['BETA_SIMULATION', betaMode], ['INSPECTION_MODE', inspectionMode]]) {
+    if (setting === 'enabled' && (deployed || !localOnly())) problems.push(`${name}=enabled is for local and test use only (http://localhost). Remove it, or set it to disabled, for the official deployment.`);
+  }
   if (value('ENTRA_CLIENT_ID') && !GUID.test(value('ENTRA_CLIENT_ID'))) problems.push('ENTRA_CLIENT_ID must be the application (client) ID, a GUID.');
   const secret = value('SESSION_SECRET');
   if (secret && secret.length < MIN_SESSION_SECRET) problems.push(`SESSION_SECRET must be at least ${MIN_SESSION_SECRET} characters of random data.`);

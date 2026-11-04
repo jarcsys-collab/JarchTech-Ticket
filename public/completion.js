@@ -46,7 +46,7 @@ function agreementPanel(t, dev) {
     const ready = t.meeting && t.meetingConfirmed;
     body = `<p class="read-only">${!t.meeting ? 'No requirements meeting yet. A Project needs one before development.' : !t.meetingConfirmed ? 'Waiting for the Requestor to confirm the meeting.' : 'After the meeting, the worker records the agreed requirements and acceptance criteria.'}</p>${dev && ready ? '<div class="actions"><button class="primary" id="record-agreement">Record agreement</button></div>' : ''}`;
   }
-  return `<section class="workflow-panel"><h3>Requirements agreement</h3>${body}</section>`;
+  return `<section class="workflow-panel" data-section="agreement" data-title="Requirements agreement">${body}</section>`;
 }
 
 function evidencePanel(t, dev) {
@@ -54,11 +54,11 @@ function evidencePanel(t, dev) {
   const removed = (t.evidence || []).filter(x => x.removed).length;
   const working = t.status === 'In progress';
   if (!items.length && !(dev && working) && !['Awaiting acceptance', 'Ready for release', 'Released', 'Closed'].includes(t.status)) return '';
-  return `<section class="workflow-panel"><h3>Completion evidence</h3>
+  return `<section class="workflow-panel" data-section="evidence" data-title="Completion evidence">
     ${items.length ? `<ul class="evidence-list">${items.map(x => `<li>${x.kind === 'link' ? evidenceLink(x) : evidenceFile(x)}<small>Added by ${esc(x.added ? x.added.name : 'worker')} · ${esc(x.added ? x.added.time : '')}</small>${dev && working ? `<button type="button" class="secondary remove-evidence" data-evidence="${x.i}">Remove<span class="sr-only"> ${esc(x.kind === 'link' ? x.label : x.file.name)}</span></button>` : ''}</li>`).join('')}</ul>` : '<p class="read-only">No evidence yet. The worker adds at least one file or deliverable link before marking the work done.</p>'}
     ${removed ? `<p class="read-only">${removed} earlier item(s) removed; see the activity.</p>` : ''}
     ${WorkflowCore.completionOf(t).summary ? `<h4>Delivery and testing summary</h4><p class="summary-text">${esc(WorkflowCore.completionOf(t).summary)}</p>` : ''}
-    ${dev && working ? `<form id="evidence-form"><div class="field-grid">${[0, 1].map(n => `<label>Link label<input name="label${n}" maxlength="150" placeholder="e.g. Test report"></label><label>Link (http or https)<input name="url${n}" type="url" maxlength="2000" placeholder="https://"></label>`).join('')}</div><p class="read-only">Links are shown as plain links that open in a new tab; JarcTech Ticket never opens them itself.</p><div class="actions"><button class="secondary">Add evidence</button></div></form>` : ''}
+    ${dev && working ? `<form id="evidence-form"><div class="field-grid">${[0, 1].map(n => `<label>Link label<input name="label${n}" maxlength="150" placeholder="e.g. Test report"></label><label>Link (http or https)<input name="url${n}" type="url" maxlength="2000" placeholder="https://"></label>`).join('')}</div><p class="read-only">Add at least one link or file. Example link: https://reports.example.com/run/42. Links open in a new tab; JarcTech Ticket never opens them itself.</p><div class="actions"><button class="secondary">Add evidence</button></div></form>` : ''}
   </section>`;
 }
 
@@ -71,22 +71,35 @@ function confirmationPanel(t, dev) {
   const gate = WorkflowCore.closable(t) ? '<span class="confirmed">Ready: an Admin can close this request.</span>'
     : t.status === 'Closed' ? 'Closed.'
     : !c.worker ? 'Waiting for the worker to add evidence and mark the work done.'
-    : !c.requestor ? `Waiting for ${sameParty(t) ? 'an Admin to review independently (the Requestor is also the worker)' : 'the Requestor to review the evidence and confirm'}.`
+    : !c.requestor ? `Waiting for ${sameParty(t) ? `an Admin to review independently (${independentReason(t)})` : 'the Requestor to review the evidence and confirm'}.`
     : 'Waiting for the worker to confirm the release or handover.';
-  const buttons = [
-    dev && t.status === 'In progress' ? '<button class="primary" id="worker-complete">Mark my work done</button>' : '',
-    dev && completing && !c.worker ? '<button class="primary" id="worker-complete">Record my completion</button>' : '',
-    dev && t.status === 'Awaiting acceptance' && c.worker && !c.requestor ? '<button class="secondary" id="withdraw-completion">Withdraw my completion</button>' : '',
-    reviewer && completing && c.worker && !c.requestor ? '<button class="primary" id="requestor-confirm">Confirm completion</button>' : '',
-    reviewer && ['Awaiting acceptance', 'Ready for release'].includes(t.status) ? '<button class="secondary" data-reason="In progress">Return for correction</button>' : '',
-    dev && t.status === 'Ready for release' && c.worker && c.requestor ? `<button class="${project ? 'primary' : 'secondary'}" data-action="Released">Confirm release / handover</button>` : '',
-    admin && WorkflowCore.closable(t) ? '<button class="primary" data-action="Closed">Close request</button>' : '',
-    admin && !reviewer && completing ? '<button class="secondary" data-reason="In progress">Return for correction</button>' : ''
-  ].join('');
-  return `<section class="workflow-panel"><h3>Completion confirmations</h3>
-    <ul class="confirmations"><li><span>Worker${t.dev ? ` (${esc(t.dev)})` : ''}</span>${confirmedBy(c.worker)}</li><li><span>Requestor${sameParty(t) ? ' side (independent Admin review)' : ` (${esc(t.name)})`}</span>${confirmedBy(c.requestor)}</li>${project ? `<li><span>Release / handover</span>${t.status === 'Released' || t.status === 'Closed' ? '<span class="confirmed">✓ Recorded</span>' : '<span class="pending">Pending</span>'}</li>` : ''}</ul>
-    <p class="closure-gate"><b>Closure:</b> ${gate} An Admin can close only after both confirmations${project ? ' and the release or handover' : ''}; one confirmation never counts as both.</p>
-    ${buttons ? `<div class="actions">${buttons}</div>` : ''}
+  // Separate stages: worker completion, Requestor confirmation, (Project) release or handover, Admin closure. Each
+  // shows who acts, its state in words (not only color), and only its own buttons.
+  const btn = (show, html) => (show ? html : '');
+  const state = (done, current) => done ? '<span class="stage-state done"><span aria-hidden="true">✓</span> Done</span>' : current ? '<span class="stage-state current"><span aria-hidden="true">●</span> Waiting</span>' : '<span class="stage-state todo"><span aria-hidden="true">○</span> Not yet</span>';
+  const released = t.status === 'Released' || t.status === 'Closed';
+  const stages = [
+    { title: 'Worker completion', who: t.dev ? `${esc(t.dev)} (worker)` : 'The assigned worker', done: Boolean(c.worker), current: !c.worker,
+      detail: c.worker ? confirmedBy(c.worker) : 'Adds evidence, then marks the work done.',
+      buttons: btn(dev && t.status === 'In progress', '<button class="primary" id="worker-complete">Mark my work done</button>')
+        + btn(dev && completing && !c.worker, '<button class="primary" id="worker-complete">Record my completion</button>')
+        + btn(dev && t.status === 'Awaiting acceptance' && c.worker && !c.requestor, '<button class="secondary" id="withdraw-completion">Withdraw my completion</button>') },
+    { title: 'Requestor confirmation', who: sameParty(t) ? `An Admin other than the worker (${independentReason(t)})` : `${esc(t.name)} (Requestor)`, done: Boolean(c.requestor), current: Boolean(c.worker) && !c.requestor,
+      detail: c.requestor ? confirmedBy(c.requestor) : 'Reviews the evidence independently, then confirms or returns it for correction.',
+      buttons: btn(reviewer && completing && c.worker && !c.requestor, '<button class="primary" id="requestor-confirm">Confirm completion</button>')
+        + btn(reviewer && ['Awaiting acceptance', 'Ready for release'].includes(t.status), '<button class="secondary" data-reason="In progress">Return for correction</button>') },
+    ...(project ? [{ title: 'Release or handover', who: t.dev ? `${esc(t.dev)} (worker)` : 'The assigned worker', done: released, current: WorkflowCore.bothConfirmed(t) && !released,
+      detail: released ? '<span class="confirmed">Recorded</span>' : 'Recorded after both confirmations.',
+      buttons: btn(dev && t.status === 'Ready for release' && c.worker && c.requestor, '<button class="primary" data-action="Released">Confirm release / handover</button>') }] : []),
+    { title: 'Admin closure', who: 'An Admin', done: t.status === 'Closed', current: WorkflowCore.closable(t),
+      detail: t.status === 'Closed' ? '<span class="confirmed">Closed</span>' : WorkflowCore.closable(t) ? 'Ready to close.' : `Possible only after both confirmations${project ? ' and the handover' : ''}.`,
+      buttons: btn(!project && dev && t.status === 'Ready for release' && c.worker && c.requestor, '<button class="secondary" data-action="Released">Record a handover (optional)</button>')
+        + btn(admin && WorkflowCore.closable(t), '<button class="primary" data-action="Closed">Close request</button>')
+        + btn(admin && !reviewer && completing, '<button class="secondary" data-reason="In progress">Return for correction</button>') }
+  ];
+  return `<section class="workflow-panel" data-section="confirmations" data-title="Completion and closure">
+    <ol class="stages">${stages.map((x, i) => `<li class="stage${x.done ? ' is-done' : x.current ? ' is-current' : ''}"><div class="stage-head"><span class="stage-num" aria-hidden="true">${i + 1}</span><b>${x.title}</b>${state(x.done, x.current)}</div><p class="stage-who">${x.who}</p><p class="stage-detail">${x.detail}</p>${x.buttons ? `<div class="actions">${x.buttons}</div>` : ''}</li>`).join('')}</ol>
+    <p class="closure-gate"><b>Closure rule:</b> ${gate} One confirmation never counts as both.</p>
     ${(t.corrections || []).length ? `<details class="corrections" open><summary>Corrections (${t.corrections.length})</summary>${t.corrections.slice().reverse().map(x => `<div class="event">Round ${x.round}: ${esc(x.reason)}<small>${esc(x.time || '')} · ${esc(x.name)} (${esc(x.view)})</small></div>`).join('')}</details>` : ''}
     ${c.log.length ? `<details class="corrections"><summary>Cleared confirmations (${c.log.length})</summary>${c.log.slice().reverse().map(x => `<div class="event">${esc(x.reason)} Worker: ${esc(x.worker ? x.worker.name : 'none')} · Requestor: ${esc(x.requestor ? x.requestor.name : 'none')}<small>${esc(x.time || '')}</small></div>`).join('')}</details>` : ''}
   </section>`;
@@ -106,6 +119,17 @@ function completeForm(t) {
   $('#complete-form').onsubmit = e => { e.preventDefault(); perform('ticket', t.id, 'worker-complete', { summary: new FormData(e.target).get('summary') }, () => refresh(t.id)); };
 }
 
+// Field-level errors for evidence links (shown next to the field and in the form's error summary when guide.js has
+// loaded), plus a short message. files: how many uploads are ready. Returns true when there is a problem.
+function evidenceProblems(form, links, files) {
+  const bad = [0, 1].map(n => form.elements['url' + n]).filter(el => el && el.value.trim() && !WorkflowCore.safeUrl(el.value.trim()));
+  const message = bad.length ? 'Links must be complete http:// or https:// addresses.' : !links.length && !files ? 'Add a deliverable link or attach a file.' : '';
+  if (!message) return false;
+  if (typeof formErrors === 'function') formErrors(form, (bad.length ? bad : [form.elements.url0]).map(field => ({ field, message: bad.length ? 'Enter a complete link that starts with https:// or http://.' : 'Add a deliverable link here, or attach a file below.' })));
+  toast(message);
+  return true;
+}
+
 const detailBeforeCompletion = detail;
 detail = function (id) {
   detailBeforeCompletion(id);
@@ -113,7 +137,7 @@ detail = function (id) {
   if (!t || !host) return;
   const dev = canDev(t);
   const missing = WorkflowCore.missingSteps(t);
-  host.innerHTML = (missing.length ? `<div class="banner missing-steps"><b>Steps not recorded for this request</b>${t.typeSource ? ' (created before request types and dual confirmation)' : ''}: ${missing.map(esc).join('; ')}. Nothing has been filled in on anyone's behalf.</div>` : '')
+  host.innerHTML = (missing.length ? `<div class="banner missing-steps" data-keep="top"><b>Steps not recorded for this request</b>${t.typeSource ? ' (created before request types and dual confirmation)' : ''}: ${missing.map(esc).join('; ')}. Nothing has been filled in on anyone's behalf.</div>` : '')
     + agreementPanel(t, dev) + evidencePanel(t, dev) + confirmationPanel(t, dev);
   host.querySelectorAll('[data-action]').forEach(b => b.onclick = () => perform('ticket', id, 'status', { status: b.dataset.action }, () => refresh(id)));
   host.querySelectorAll('[data-reason]').forEach(b => b.onclick = () => reason(t, b.dataset.reason));
@@ -127,8 +151,7 @@ detail = function (id) {
     e.preventDefault();
     const f = new FormData(e.target);
     const links = [0, 1].map(n => ({ label: String(f.get('label' + n) || '').trim(), url: String(f.get('url' + n) || '').trim() })).filter(l => l.url);
-    if (links.some(l => !WorkflowCore.safeUrl(l.url))) return toast('Links must be complete http:// or https:// addresses.');
-    if (!links.length) return toast('Add a deliverable link or attach a file.');
+    if (evidenceProblems(e.target, links, 0)) return;
     perform('ticket', id, 'add-evidence', { links }, () => refresh(id));
   };
 };

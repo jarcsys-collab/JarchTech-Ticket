@@ -1,9 +1,10 @@
-// HTTP handler: the browser prototype's static files, health and readiness checks, and (with AUTH_MODE=entra)
-// Microsoft sign-in in front of the app and its ticket APIs (My workspace and the beta simulation).
+// HTTP handler: the app's static files, health and readiness checks, and (with AUTH_MODE=entra, the only mode allowed
+// when deployed) Microsoft sign-in in front of the app and its ticket API. The browser-only demo is local only.
 const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { injectSession } = require('./auth/index.cjs');
+const { contentSecurityPolicy, injectSession, sessionNonce } = require('./auth/index.cjs');
+const { baseHeaders } = require('./http.cjs');
 const { BETA_COLLECTIONS, CORE_COLLECTIONS, WORK_COLLECTIONS } = require('./schema.cjs');
 
 const ROOT = path.join(__dirname, '..', 'public');
@@ -69,7 +70,7 @@ function createHealth({ database, requireSchema, isShuttingDown, log, now = Date
   };
 }
 
-async function serveStatic(req, res, pathname, user, page) {
+async function serveStatic(req, res, pathname, user, page, auth) {
   let name;
   try { name = decodeURIComponent(pathname); }
   catch { res.writeHead(400); return res.end('Bad request'); }
@@ -80,7 +81,11 @@ async function serveStatic(req, res, pathname, user, page) {
   try { bytes = await fs.readFile(file); }
   catch { res.writeHead(404); return res.end('Not found'); }
   const headers = { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
-  if (user && name === '/index.html') { bytes = injectSession(bytes.toString('utf8'), user, page); headers['X-Frame-Options'] = 'DENY'; }
+  if (user && name === '/index.html') {
+    const nonce = sessionNonce();
+    bytes = injectSession(bytes.toString('utf8'), user, { ...page, nonce });
+    headers['Content-Security-Policy'] = contentSecurityPolicy({ nonce, formOrigins: auth.formOrigins });
+  }
   res.writeHead(200, headers);
   res.end(req.method === 'HEAD' ? undefined : bytes);
 }
@@ -93,13 +98,14 @@ function createServer({ database = null, auth = null, isShuttingDown = () => fal
   const health = createHealth({ database, requireSchema, isShuttingDown, log, now });
   return http.createServer(async (req, res) => {
     const pathname = (req.url || '/').split('?')[0];
+    for (const [name, value] of Object.entries(baseHeaders({ secure: Boolean(auth && auth.secure) }))) res.setHeader(name, value);
     if (auth && await auth.handle(req, res, pathname)) return;
     if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405, { Allow: 'GET, HEAD' }); return res.end(); }
     if (pathname === '/healthz' || pathname === '/readyz') return health(req, res, pathname);
     if (!auth) return serveStatic(req, res, pathname, null);
     try {
       const access = await auth.gate(req, res, pathname);
-      if (access) return serveStatic(req, res, pathname, access.user || null, access.page);
+      if (access) return serveStatic(req, res, pathname, access.user || null, access.page, auth);
     } catch (err) {
       log.error(`Request failed: ${database.redact(`${err.name}: ${err.message}`)}`);
       if (!res.headersSent) { res.writeHead(503, { 'Cache-Control': 'no-store' }); res.end('Service unavailable'); }

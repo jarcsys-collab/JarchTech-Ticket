@@ -22,6 +22,7 @@ function createOidc(auth, { issuer, allowInsecure = false } = {}) {
   }
 
   return {
+    origin: issuerUrl.origin, // where sign-out continues to after the app's own form
     redirectUri,
     async begin() {
       const { client, config } = await configuration();

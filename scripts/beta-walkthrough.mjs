@@ -85,7 +85,7 @@ const HELPERS = `window.__w={
   submit(sel){__w.el(sel).requestSubmit()},
   view(r){__w.set('#demo-role',r)},
   open(id){__w.click('[data-id="'+id+'"]')},
-  esc(){document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
+  esc(){for(let i=0;i<2;i++)document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
   toast(){return document.querySelector('#toast').textContent},
   saveState(){return document.querySelector('.save').dataset.state||''},
   text(){return document.querySelector('#dialog-content').textContent},
@@ -243,10 +243,10 @@ try {
     await P1.do(`__w.click('#worker-complete');__w.set('#complete-form [name=summary]','Tested against the criteria.');__w.set('#complete-form input[type=checkbox]',true);__w.submit('#complete-form')`);
     check('the worker marks the work done; the Requestor confirmation is still pending', await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='Awaiting acceptance'&&t.completion.worker.name==='Miguel Santos'&&!t.completion.requestor)`));
     await as(P1, 'Admin', 'JRC-1043');
-    check('the Admin sees who confirmed and what is pending, and has no Close button', await P1.w(`!document.querySelector('#workflow-panels [data-action="Closed"]') && __w.text().includes('✓ Miguel Santos') && __w.text().includes('Waiting for the Requestor to review the evidence and confirm')`));
+    check('the Admin sees who confirmed and what is pending, and has no Close button', await P1.w(`!document.querySelector('[data-section="confirmations"] [data-action="Closed"]') && __w.text().includes('✓ Miguel Santos') && __w.text().includes('Waiting for the Requestor to review the evidence and confirm')`));
     await as(P1, 'Requestor', 'JRC-1043');
     check('the Requestor sees the evidence and the delivery summary', await P1.w(`__w.text().includes('Test run 42') && __w.text().includes('wt-proof.png') && __w.text().includes('Tested against the criteria.')`));
-    await P1.do(`__w.click('#workflow-panels [data-reason="In progress"]');__w.set('#reason-form [name=reason]','Totals are wrong.');__w.submit('#reason-form')`);
+    await P1.do(`__w.click('[data-section="confirmations"] [data-reason="In progress"]');__w.set('#reason-form [name=reason]','Totals are wrong.');__w.submit('#reason-form')`);
     check('returning for correction clears the worker confirmation and keeps the reason', await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='In progress'&&!t.completion.worker&&t.corrections[0].reason==='Totals are wrong.'&&t.completion.log.length===1)`));
     await as(P1, 'Developer', 'JRC-1043');
     check('the worker sees the correction history', await P1.w(`__w.text().includes('Corrections (1)') && __w.text().includes('Totals are wrong.')`));
@@ -259,6 +259,14 @@ try {
     check('a Project still needs its release or handover before closure', await P1.w(`!document.querySelector('[data-action="Closed"]') && __w.text().includes('Waiting for the worker to confirm the release or handover')`));
     await as(P1, 'Developer', 'JRC-1043');
     await P1.do(`__w.click('[data-action="Released"]')`);
+    await as(P1, 'Admin', 'JRC-1043');
+    await P1.do(`__w.click('[data-action="Closed"]')`);
+    check('an open scope change holds up closure', await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='Released')`) && await P1.w(`__w.toast().includes('CR-202 is still open')`), await P1.w(`__w.toast()`));
+    // Deliver the approved change, then close.
+    await onChange('Developer', `__w.click('[data-cstatus="In progress"]')`);
+    await onChange('Developer', `__w.set('#change-test [name=results]','Passed.');__w.set('#change-test [type=checkbox]',true);__w.submit('#change-test')`);
+    await onChange('Requestor', `__w.click('[data-cstatus="Accepted"]')`);
+    await onChange('Developer', `__w.click('[data-cstatus="Released"]')`);
     await as(P1, 'Admin', 'JRC-1043');
     await P1.do(`__w.click('[data-action="Closed"]')`);
     check('after both confirmations and the handover, the Admin closes it', await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='Closed')`));
@@ -277,7 +285,7 @@ try {
     await P1.do(`__w.click('[data-action="In progress"]')`);
     await P1.do(`__w.set('#evidence-form [name=url0]','http://intranet.example/printer-log');__w.submit('#evidence-form')`);
     await P1.do(`__w.click('#worker-complete');__w.set('#complete-form [name=summary]','Printer reset and tested.');__w.set('#complete-form input[type=checkbox]',true);__w.submit('#complete-form')`);
-    check('the self-assigned Admin marks the work done but cannot confirm for the Requestor', await P1.w(`__w.ticket('JRC-1044').then(t=>t.completion.worker.name==='Alex Admin')`) && await P1.w(`!document.querySelector('#requestor-confirm') && !document.querySelector('#workflow-panels [data-action="Closed"]')`));
+    check('the self-assigned Admin marks the work done but cannot confirm for the Requestor', await P1.w(`__w.ticket('JRC-1044').then(t=>t.completion.worker.name==='Alex Admin')`) && await P1.w(`!document.querySelector('#requestor-confirm') && !document.querySelector('[data-section="confirmations"] [data-action="Closed"]')`));
     await as(P1, 'Developer');
     check('the Developer view does not list the Admin’s own assignment', await P1.w(`!document.querySelector('[data-id="JRC-1044"]') && !!document.querySelector('[data-id="JRC-1042"]')`));
     await as(P1, 'Requestor', 'JRC-1044');
@@ -303,7 +311,7 @@ try {
     check('after refresh: shared records reload from the server and the simulation view is remembered', await P1.w(`document.querySelector('#demo-role').value==='Admin' && !!document.querySelector('[data-id="JRC-1043"]')`) && await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='Closed')`));
     await P1.loads(() => P1.w(`__w.click('#sign-out')`));
     await signIn(P1, 1, 'Member One');
-    check('after signing out and in again: records are still there', await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='Closed')`) && await P1.w(`__w.change('CR-202').then(c=>c.status==='Approved')`));
+    check('after signing out and in again: records are still there', await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='Closed')`) && await P1.w(`__w.change('CR-202').then(c=>c.status==='Released')`));
 
     // ---------- Two browser contexts ----------
     section = 'two contexts';

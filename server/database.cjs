@@ -1,5 +1,4 @@
-// MongoDB connection for the configured database. Nothing is read or written yet; the server only checks
-// reachability with a ping. The driver connects lazily on the first command.
+// MongoDB connection for the configured database. The driver connects lazily on the first command.
 const { MongoClient } = require('mongodb');
 const { redact, secretsFromUri } = require('./redact.cjs');
 const { missingSchema } = require('./schema.cjs');
@@ -21,7 +20,7 @@ function createDatabase(config) {
   const secrets = secretsFromUri(config.uri);
   let client;
   try {
-    client = new MongoClient(config.uri, { appName: 'jarctech-ticket', serverSelectionTimeoutMS: SERVER_SELECTION_TIMEOUT_MS });
+    client = new MongoClient(config.uri, { appName: 'jarctech-ticket', serverSelectionTimeoutMS: SERVER_SELECTION_TIMEOUT_MS, maxPoolSize: 25 });
   } catch (err) {
     // Parse errors can quote the connection string, so only the redacted message leaves this module.
     throw new Error('MONGODB_URI could not be used: ' + redact(err.message, secrets));

@@ -1,6 +1,6 @@
 /* Project planning and Gantt views. Uses the ticket state and workflow in app.js. */
 const TL = TicketTimeline;
-$('#demo-role').onchange = e => {
+if ($('#demo-role')) $('#demo-role').onchange = e => { // local and test modes only
   role = e.target.value;
   view = 'Tickets'; resetListFilters(); layout = 'table'; // a new view starts from an unfiltered list
   close(); render();
@@ -22,23 +22,27 @@ detail = function (id) {
   if (t.project) {
     const heading = document.createElement('section');
     heading.className = 'project-summary';
+    heading.dataset.section = 'project';
+    heading.dataset.title = 'Project plan and Gantt chart';
     const agreement = WorkflowCore.agreementOf(t);
     heading.innerHTML = `<h3>${esc(t.projectName || t.title)}</h3><p>${agreement ? `Timeline from agreement v${agreement.version} (locked).` : 'Created before locked agreements: the agreement still needs to be recorded and confirmed.'} Delivery target: ${esc(t.dueDate || t.date)}.</p><div class="actions"><button class="primary" id="open-gantt">View project Gantt chart →</button></div>`;
-    $('#comment-form').before(heading);
+    $('[data-section="activity"]').before(heading);
     $('#open-gantt').onclick = () => projectView(id);
   }
   const changes = state.changes.filter(c => c.ticket === id);
   if (changes.length) {
     const section = document.createElement('section');
-    section.innerHTML = `<h3>Linked change requests</h3>${changes.map(c => `<button class="linked-change" data-linked-change="${c.id}"><span>${esc(c.id)} · ${esc(c.title)}</span>${pill(c.status)}</button>`).join('')}`;
-    $('#comment-form').before(section);
+    Object.assign(section.dataset, { section: 'changes', title: `Linked scope changes (${changes.length})` });
+    section.innerHTML = `${changes.map(c => `<button class="linked-change" data-linked-change="${c.id}"><span>${esc(c.id)} · ${esc(c.title)}</span>${pill(c.status)}</button>`).join('')}`;
+    $('[data-section="activity"]').before(section);
     section.querySelectorAll('[data-linked-change]').forEach(b => b.onclick = () => changeDetail(b.dataset.linkedChange));
   }
   // Projects created before locked agreements: the worker can still hold the requirements meeting.
   if (dev && t.project && !WorkflowCore.agreementOf(t) && ['Planning', 'In progress'].includes(t.status)) {
     const section = document.createElement('section');
-    section.innerHTML = `<h3>Requirements planning</h3><button class="secondary" id="edit-meeting">${t.meeting ? 'Edit requirements meeting' : 'Schedule requirements meeting'}</button>`;
-    $('#comment-form').before(section);
+    Object.assign(section.dataset, { section: 'meeting-plan', title: 'Requirements planning' });
+    section.innerHTML = `<p class="read-only">This project was created before locked agreements. Hold the requirements meeting, then record the agreement for both sides to confirm.</p><button class="secondary" id="edit-meeting">${t.meeting ? 'Edit requirements meeting' : 'Schedule requirements meeting'}</button>`;
+    $('[data-section="activity"]').before(section);
     $('#edit-meeting').onclick = () => planningMeeting(t);
   }
 };
