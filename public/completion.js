@@ -71,7 +71,7 @@ function confirmationPanel(t, dev) {
   const gate = WorkflowCore.closable(t) ? '<span class="confirmed">Ready: an Admin can close this request.</span>'
     : t.status === 'Closed' ? 'Closed.'
     : !c.worker ? 'Waiting for the worker to add evidence and mark the work done.'
-    : !c.requestor ? `Waiting for ${sameParty(t) ? 'an Admin to review independently (the Requestor is also the worker)' : 'the Requestor to review the evidence and confirm'}.`
+    : !c.requestor ? `Waiting for ${sameParty(t) ? `an Admin to review independently (${independentReason(t)})` : 'the Requestor to review the evidence and confirm'}.`
     : 'Waiting for the worker to confirm the release or handover.';
   // Separate stages: worker completion, Requestor confirmation, (Project) release or handover, Admin closure. Each
   // shows who acts, its state in words (not only color), and only its own buttons.
@@ -84,7 +84,7 @@ function confirmationPanel(t, dev) {
       buttons: btn(dev && t.status === 'In progress', '<button class="primary" id="worker-complete">Mark my work done</button>')
         + btn(dev && completing && !c.worker, '<button class="primary" id="worker-complete">Record my completion</button>')
         + btn(dev && t.status === 'Awaiting acceptance' && c.worker && !c.requestor, '<button class="secondary" id="withdraw-completion">Withdraw my completion</button>') },
-    { title: 'Requestor confirmation', who: sameParty(t) ? 'An Admin other than the worker (the Requestor is also the worker)' : `${esc(t.name)} (Requestor)`, done: Boolean(c.requestor), current: Boolean(c.worker) && !c.requestor,
+    { title: 'Requestor confirmation', who: sameParty(t) ? `An Admin other than the worker (${independentReason(t)})` : `${esc(t.name)} (Requestor)`, done: Boolean(c.requestor), current: Boolean(c.worker) && !c.requestor,
       detail: c.requestor ? confirmedBy(c.requestor) : 'Reviews the evidence independently, then confirms or returns it for correction.',
       buttons: btn(reviewer && completing && c.worker && !c.requestor, '<button class="primary" id="requestor-confirm">Confirm completion</button>')
         + btn(reviewer && ['Awaiting acceptance', 'Ready for release'].includes(t.status), '<button class="secondary" data-reason="In progress">Return for correction</button>') },

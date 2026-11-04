@@ -339,6 +339,13 @@ test('reminders: due soon to the assignee, escalation to Admins, confirmation, n
   clock = new Date(Date.now() + 5 * DAY);
   await runner.runOnce();
   assert.equal((await mine(LEAD, n => n.title.includes('ready for Admin closure'))).length, 1, 'closure reminder to the Admins');
+  const held = await act(LEAD, ids.r1, 'status', { status: 'Closed' });
+  assert.equal(held.status, 409, 'the approved scope change is not delivered yet');
+  assert.match(held.json.message, /still open/);
+  assert.equal((await change(ADM, 'status', { status: 'In progress' })).status, 200);
+  assert.equal((await change(ADM, 'submit-test', { results: 'Passed.' })).status, 200);
+  assert.equal((await change(REQ1, 'status', { status: 'Accepted' })).status, 200);
+  assert.equal((await change(ADM, 'status', { status: 'Released' })).status, 200);
   assert.equal((await act(LEAD, ids.r1, 'status', { status: 'Closed' })).status, 200, 'another Admin closes it');
   const count = await db.collection('notifications').countDocuments({ record: ids.r1, reminder: true });
   clock = new Date(Date.now() + 20 * DAY);

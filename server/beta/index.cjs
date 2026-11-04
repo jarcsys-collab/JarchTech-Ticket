@@ -67,8 +67,8 @@ const policy = {
   reset: { phrase: RESET_PHRASE, event: 'beta.reset', seed: seedWorkspace }
 };
 
-function createBeta({ db, log = console, now = () => new Date(), recordEvent = async () => {}, settings }) {
-  return createWorkspace({ db, policy, log, now, recordEvent, settings });
+function createBeta({ db, log = console, now = () => new Date(), recordEvent = async () => {}, settings, attachmentQuotaBytes }) {
+  return createWorkspace({ db, policy, log, now, recordEvent, settings, attachmentQuotaBytes });
 }
 
 module.exports = { RESET_PHRASE, WORKSPACE, createBeta, policy, seedWorkspace };

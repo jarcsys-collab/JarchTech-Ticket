@@ -27,7 +27,7 @@ class Conflict extends Error {
 }
 
 // policy: see server/beta/index.cjs and server/work/index.cjs. settings: deadline settings (timezone, dueSoonDays).
-function createWorkspace({ db, policy, log = console, now = () => new Date(), recordEvent = async () => {}, settings = DeadlineCore.DEFAULTS }) {
+function createWorkspace({ db, policy, log = console, now = () => new Date(), recordEvent = async () => {}, settings = DeadlineCore.DEFAULTS, attachmentQuotaBytes }) {
   const WORKSPACE = policy.workspace;
   const names = policy.names;
   const base = policy.base.replace(/[/]/g, '\\/');
@@ -40,11 +40,16 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   const tickets = db.collection(names.tickets);
   const changes = db.collection(names.changes);
   const files = createAttachments({
-    db, workspace: WORKSPACE, log, now,
+    db, workspace: WORKSPACE, log, now, quotaBytes: attachmentQuotaBytes,
     names: { attachments: names.attachments, bucket: names.bucket, tickets: names.tickets },
     canSeeTicket: async (actor, id) => { const t = id && await tickets.findOne({ workspace: WORKSPACE, id }); return Boolean(t && await policy.canSee(actor, t, null, 'download')); }
   });
-  const notify = createNotifications({ db, workspace: WORKSPACE, collection: names.notifications, addressing: policy.addressing, log, stamp });
+  // Simulated inboxes follow the simulated view; real accounts see a notification's text only while they may see its ticket.
+  const readable = policy.simulated ? null : async (user, docs) => {
+    const ids = [...new Set(docs.map(d => d.ticket).filter(Boolean))];
+    return new Set((await tickets.find({ workspace: WORKSPACE, id: { $in: ids }, ...await policy.visible(user) }, { projection: { id: 1 } }).toArray()).map(t => t.id));
+  };
+  const notify = createNotifications({ db, workspace: WORKSPACE, collection: names.notifications, addressing: policy.addressing, log, stamp, readable });
   const toClient = ({ _id, workspace, requestId, ...rest }) => rest;
   const entry = (text, actor, view, at, attachments) => ({ text, time: stamp(at), at, actor: actor.displayName || actor.email, actorId: String(actor._id), view, ...(attachments ? { attachments } : {}) });
   const withFiles = (text, claimed) => claimed ? `${text} (${claimed.list.length} attachment${claimed.list.length === 1 ? '' : 's'})` : text;
@@ -169,6 +174,12 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     try {
       if (body.action === 'add-evidence') input.files = claimed ? claimed.list : [];
       if (body.action === 'comment' && claimed && !String(input.comment || '').trim()) input.comment = `Shared ${claimed.list.length} attachment${claimed.list.length === 1 ? '' : 's'}.`;
+      // A linked scope change still open must be decided before the request can close: otherwise an approved change
+      // could add work to, or be left stranded on, a closed request.
+      if (body.action === 'status' && (body.input || {}).status === 'Closed') {
+        const open = await changes.findOne({ workspace: WORKSPACE, ticket: id, status: { $nin: WorkflowCore.CHANGE_SETTLED } }, { projection: { id: 1 } });
+        if (open) throw new WorkflowCore.WorkflowError('state', `Scope change ${open.id} is still open. Finish, defer, or reject it before closing this request.`);
+      }
       ({ ctx, next } = tryAs(contexts, c => {
         const copy = clone(current);
         const notes = WorkflowCore.ticketAction(copy, body.action, input, c);
@@ -233,7 +244,13 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
         const ticketNotes = result.ticketEffect(nextTicket);
         nextTicket.history.push(...ticketNotes.map(n => entry(n, actor, ctx.view, at)));
         if (await replaceIfCurrent(tickets, ticket, nextTicket, at)) break;
-        if (attempt >= 4) { log.error(`${policy.label}: ${id} saved but ticket ${current.ticket} could not be updated after retries.`); break; }
+        // The ticket keeps changing: undo this change's own step rather than leave the two records out of step.
+        if (attempt >= 7) {
+          await changes.replaceOne({ _id: current._id, version: current.version + 1 }, (({ _id, ...fields }) => fields)(current));
+          log.error(`${policy.label}: ${id} was not saved because ticket ${current.ticket} kept changing.`);
+          throw await conflict('tickets', current.ticket);
+        }
+        await new Promise(r => setTimeout(r, Math.random() * 40 * (attempt + 1)));
         ticket = await tickets.findOne({ _id: ticket._id });
       }
     }
@@ -307,6 +324,11 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     const range = kind === 'Overdue' ? { $lt: today } : { $gte: today, $lte: DeadlineCore.addDays(today, settings.dueSoonDays) };
     return { status: { $in: DeadlineCore.DELIVERY }, $or: [{ dueDate: { $type: 'string', $ne: '', ...range } }, { dueDate: { $exists: false }, project: { $type: 'string' }, date: { $type: 'string', ...range } }] };
   }
+  // A record that would break a stored limit is refused with a clear message instead of failing as a server error.
+  const translateWriteError = err => {
+    if (err && err.code === 121) return new WorkflowCore.WorkflowError('state', 'This record has reached its size limit (activity entries or tasks). Ask an Admin for help.');
+    return err;
+  };
   async function getTicket(user, id, view) {
     const t = await visibleTicket(user, id, view);
     return { tickets: [toClient(t)], changes: (await changes.find({ workspace: WORKSPACE, ticket: id }).toArray()).map(toClient) };
@@ -351,7 +373,8 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
       else if (at('/notifications/read')) return sendJson(req, res, 200, await notify.markRead(user, body));
       else return sendJson(req, res, 404, { error: 'not-found' });
       return sendJson(req, res, result.created && !result.duplicate ? 201 : 200, { ...result, notices: await notices(await policy.visible(user, body.view)), ...(at('/reset') ? await workspace(user, body.view) : {}) });
-    } catch (err) {
+    } catch (caught) {
+      const err = translateWriteError(caught);
       if (err instanceof AttachmentError) {
         // An upload refused part-way may leave unread request data; close the connection rather than read it all.
         return sendJson(req, res, err.status, { error: err.code, message: err.message }, req.complete ? {} : { Connection: 'close' });
@@ -359,6 +382,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
       if (err instanceof Conflict) return sendJson(req, res, 409, { error: 'conflict', message: err.message, ...err.payload });
       if (err instanceof WorkflowCore.WorkflowError) {
         const status = { forbidden: 403, invalid: 400, state: 409 }[err.code] || 400;
+        if (!req.complete) return sendJson(req, res, status, { error: err.code, message: err.message }, { Connection: 'close' });
         return sendJson(req, res, status, { error: err.code, message: err.message });
       }
       throw err;
@@ -373,7 +397,9 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     return ts.map(t => ({ ticket: t, changes: cs.filter(c => c.ticket === t.id) }));
   };
 
-  return { handle, workspace, files, notify, scan, policy, seed: options => policy.reset && policy.reset.seed(db, { now, ...options }) };
+  const usage = () => files.usage();
+
+  return { handle, workspace, files, notify, scan, policy, usage, seed: options => policy.reset && policy.reset.seed(db, { now, ...options }) };
 }
 
 module.exports = { Conflict, createWorkspace };

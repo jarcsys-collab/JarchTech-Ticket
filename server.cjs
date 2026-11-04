@@ -1,5 +1,5 @@
-// Entry point: loads settings, serves the prototype with health checks, and shuts down cleanly.
-// Without MONGODB_URI the server runs exactly as the browser-only prototype; the UI never uses the database yet.
+// Entry point: loads settings, serves the app with health checks, and shuts down cleanly. Deployed, it always runs with
+// Microsoft sign-in and MongoDB. The browser-only demo (no sign-in, no database) runs only on a local machine.
 const path = require('node:path');
 const { createServer } = require('./server/app.cjs');
 const { ConfigError, loadConfig, loadEnvFile } = require('./server/config.cjs');
@@ -15,7 +15,7 @@ const SHUTDOWN_GRACE_MS = 8000;
 // clock, whether the reminder timer starts, and a stand-in for the email provider's HTTP API).
 async function start(config, { log = console, oidc, now, scheduler = true, emailFetch } = {}) {
   const database = createDatabase(config.database);
-  const auth = config.auth.mode === 'entra' ? createAuth(config.auth, { database, log, oidc, now, settings: config.reminders, email: config.email }) : null;
+  const auth = config.auth.mode === 'entra' ? createAuth(config.auth, { database, log, oidc, now, settings: config.reminders, email: config.email, limits: config.limits, deployed: config.deployed }) : null;
   // Reminders run on the server with sign-in (they need My workspace); email is optional and off by default.
   const clock = now || (() => new Date());
   const email = auth ? createEmail({ config: config.email, db: database.db(), fetch: emailFetch, now: clock, log }) : null;
@@ -44,13 +44,14 @@ async function start(config, { log = console, oidc, now, scheduler = true, email
     : config.auth.accessPolicy === 'tenant-members'
       ? 'Sign-in: Microsoft Entra ID required. Access policy tenant-members: member accounts of the configured tenant may sign in; new users start as Requestor. Guests and other tenants are refused.'
       : 'Sign-in: Microsoft Entra ID required. Access policy invite-only: access is by admin invitation only.');
+  if (auth) log.log(config.auth.beta || config.auth.inspection ? `Local test features on:${config.auth.beta ? ' beta simulation' : ''}${config.auth.inspection ? ' inspection' : ''}.` : 'Mode: official. Beta simulation and inspection are off.');
   if (database.configured) {
     log.log(`Database: ${database.name} configured. Checking connection...`);
     database.ping(5000).then(r => r.ok
       ? log.log('Database: connected.')
       : log.error(`Database: ${r.reason}. The app keeps running and /readyz reports not ready.${r.error ? ' ' + r.error : ''}`));
   } else {
-    log.log('Database: not configured. Running as the browser-only prototype.');
+    log.log('Database: not configured. Running the browser-only demo for local use.');
   }
 
   // Stop accepting connections, let in-flight requests finish (forced after the grace period), then close the database.
@@ -88,6 +89,10 @@ async function main() {
     console.error(err.message);
     process.exit(1);
   }
+
+  // An unexpected failure is logged without its details (they could quote a connection string); the request-level
+  // handlers answer normally for everything else, and the process keeps serving.
+  process.on('unhandledRejection', err => console.error(`Unhandled failure: ${err && err.name ? err.name : 'unknown'}`));
 
   let app;
   try { app = await start(config); }

@@ -46,6 +46,8 @@ function createReminders({ db, workspaces, settings = DeadlineCore.DEFAULTS, ema
       const docs = await ws.notify.remind(items, at);
       created += docs.length;
       if (docs.length && email && email.enabled && !ws.policy.simulated) await email.enqueue(docs);
+      // Abandoned uploads are removed on this schedule too, so cleanup does not depend on someone opening the app.
+      await ws.files.sweep().catch(err => log.error(`Attachment cleanup failed: ${err.name}`));
     }
     if (email && email.enabled) await email.process();
     await locks.updateOne({ _id: JOB, owner: instanceId }, { $set: { lastRunAt: at } });

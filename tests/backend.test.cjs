@@ -84,7 +84,7 @@ test('without database settings: prototype mode, healthy but not ready', async (
     assert.equal((await request(app.port, '/healthz')).status, 200);
     const ready = await request(app.port, '/readyz');
     assert.equal(ready.status, 503); assert.deepEqual(ready.json, { status: 'not-ready', database: 'not-configured' });
-    assert.ok(lines.some(l => l.includes('browser-only prototype')));
+    assert.ok(lines.some(l => l.includes('browser-only demo')));
   } finally { await app.shutdown(); }
 });
 

@@ -1,6 +1,6 @@
 /* Project planning and Gantt views. Uses the ticket state and workflow in app.js. */
 const TL = TicketTimeline;
-$('#demo-role').onchange = e => {
+if ($('#demo-role')) $('#demo-role').onchange = e => { // local and test modes only
   role = e.target.value;
   view = 'Tickets'; resetListFilters(); layout = 'table'; // a new view starts from an unfiltered list
   close(); render();

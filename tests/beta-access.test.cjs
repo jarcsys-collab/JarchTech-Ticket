@@ -62,9 +62,9 @@ const adminActor = async () => {
   return users().findOne({ email: 'beta-admin@jarcgroup.example' });
 };
 
-test('the sign-in page explains beta access', async () => {
+test('the sign-in page explains who can sign in', async () => {
   const page = await call('/auth/signin');
-  assert.match(page.text, /all company member accounts can sign in; new users start as Requestors/);
+  assert.match(page.text, /Company members can sign in; a new account starts as a Requestor/);
 });
 
 test('a member of the configured tenant is admitted without an invitation, as Requestor, once', async () => {

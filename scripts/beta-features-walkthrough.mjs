@@ -82,7 +82,7 @@ const HELPERS = `window.__w={
   submit(sel){__w.el(sel).requestSubmit()},
   view(r){__w.set('#demo-role',r)},
   open(id){__w.click('[data-id="'+id+'"]')},
-  esc(){document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
+  esc(){for(let i=0;i<2;i++)document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
   toast(){return document.querySelector('#toast').textContent},
   saveState(){return document.querySelector('.save').dataset.state||''},
   text(){return document.querySelector('#dialog-content').textContent},
@@ -116,7 +116,7 @@ try {
   app = await start(loadConfig({
     NODE_ENV: 'test', PORT: String(port), MONGODB_URI: mongod.getUri(), MONGODB_DB_NAME: 'jarctech_beta_features_walkthrough', AUTH_MODE: 'entra', ACCESS_POLICY: 'tenant-members', BETA_SIMULATION: 'enabled', INSPECTION_MODE: 'enabled',
     ENTRA_TENANT_ID: TENANT, ENTRA_CLIENT_ID: CLIENT, ENTRA_CLIENT_SECRET: 'beta-walkthrough-secret', APP_BASE_URL: origin, SESSION_SECRET: 'beta-walkthrough-session-secret-0123456789ab'
-  }), { log: { log() {}, error(...a) { console.log('server error:', a.join(' ')); } }, oidc: { issuer: entra.issuer, allowInsecure: true } });
+  }), { log: { log() {}, error(...a) { console.log('server error:', a.join(' ')); } }, oidc: { issuer: entra.issuer, allowInsecure: true }, scheduler: false });
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'jarctech-betacheck-'));
   browser = spawn(BROWSER, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-sync', '--hide-scrollbars', '--force-device-scale-factor=1', `--user-data-dir=${profile}`, `--remote-debugging-port=${debug}`, '--window-size=1400,1000', 'about:blank'], { stdio: 'ignore' });
   let pageWs, browserWs;

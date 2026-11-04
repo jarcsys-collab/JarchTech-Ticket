@@ -33,7 +33,7 @@ function stepFor(t) {
 // Who takes a step, in words.
 function whoActs(step, t) {
   if (step.party === 'worker') return `${t.dev || 'The assigned worker'} (worker)`;
-  if (step.party === 'requestor') return step.independent ? 'An Admin other than the worker (independent review, because the Requestor is also the worker)' : `${t.name} (Requestor)`;
+  if (step.party === 'requestor') return step.independent ? `An Admin other than the worker (independent review, because ${independentReason(t)})` : `${t.name} (Requestor)`;
   return 'An Admin';
 }
 // Simulated modes only: which view takes the step (never offered in My workspace).
@@ -205,6 +205,7 @@ function actionHome(items) {
   let waiting = 0;
   for (const t of items) {
     const contexts = guideContexts(t), s = stepFor(t);
+    if (role === 'Admin' && workerStuck(t)) queues.admin.push({ t, s: { title: 'Reassign this work: the worker can no longer act' } });
     if (s && s.mine) queues[s.party === 'worker' ? 'work' : s.party === 'admin' || s.mine === 'Admin' ? 'admin' : 'requests'].push({ t, s });
     else if (s) waiting++;
     for (const c of state.changes.filter(x => x.ticket === t.id)) {

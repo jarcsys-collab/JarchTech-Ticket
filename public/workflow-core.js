@@ -38,6 +38,9 @@
   const ACTIVE_WORK = ['Planning', 'In progress'];
   const PLANNING = ['Assigned', 'Meeting scheduled'];
   const COMPLETING = ['Awaiting acceptance', 'Ready for release', 'Released'];
+  // Scope changes that no longer hold up closure: finished, or parked or refused by an Admin.
+  const CHANGE_SETTLED = ['Released', 'Closed', 'Rejected', 'Deferred'];
+  const MAX_TASKS = 200;
   const CHANGE_STATUSES = ['Submitted', 'Assessment', 'Awaiting approval', 'Approved', 'Deferred', 'Rejected', 'In progress', 'Awaiting acceptance', 'Accepted', 'Released', 'Closed'];
   const MAX_EVIDENCE = 40;
   const MAX_LINKS = 10;
@@ -132,6 +135,7 @@
 
   function validateProjectTasks(tasks, target) {
     if (!tasks.length) return 'Add at least one task.';
+    if (tasks.length > MAX_TASKS) return `Keep a project to ${MAX_TASKS} tasks.`;
     for (const task of tasks) {
       const err = TL.validateTask(task); if (err) return err;
       if (task.end > target) return 'A task ends after the delivery target. Choose a later target or earlier task dates.';
@@ -142,6 +146,7 @@
     const task = {};
     for (const key of ['title', 'requirement', 'criteria', 'start', 'end', 'owner']) task[key] = String(input?.[key] ?? '').trim();
     if (task.title.length > 150) fail('invalid', 'Task name is too long (maximum 150 characters).');
+    for (const [key, label] of [['requirement', 'Agreed requirement'], ['criteria', 'Task acceptance criteria']]) if (task[key].length > 2000) fail('invalid', `${label} is too long (maximum 2000 characters).`);
     if (task.owner && !owners.includes(task.owner)) fail('invalid', owners === people ? 'Choose a task owner from the sample developers.' : 'Choose a task owner from the list.');
     return task;
   }
@@ -173,6 +178,14 @@
         if (to === 'Under review') {
           allow(admin || req);
           inState((admin && EARLY.includes(t.status)) || (req && t.status === 'Waiting for information'));
+          // Resuming assigned work returns it to where it was, so a Project's agreement and timeline still apply.
+          // Work held after completion restarts (its confirmations were cleared when it was put on hold).
+          if (t.status === 'On hold' && t.dev && t.heldFrom) {
+            t.status = COMPLETING.includes(t.heldFrom) ? 'In progress' : t.heldFrom;
+            delete t.heldFrom;
+            return [`${ctx.view}: resumed. Status is ${t.status}.`];
+          }
+          delete t.heldFrom;
         } else if (to === 'In progress') {
           allow(worker, 'Only the assigned worker can start the work.');
           if (type === 'Project') {
@@ -203,7 +216,7 @@
             'On hold': admin && !FINAL.includes(t.status),
             Cancelled: req && EARLY.includes(t.status)
           };
-          if (!(status in rules)) fail('invalid', 'Unknown decision.');
+          if (!Object.hasOwn(rules, String(status))) fail('invalid', 'Unknown decision.');
           allow(status === 'Cancelled' ? req : admin);
           inState(rules[status]);
         }
@@ -218,6 +231,7 @@
           notes.push(`${ctx.view}: ${status}. ${reason}`);
           // Work put on hold after completion must be confirmed again when it resumes.
           if (status === 'On hold' && COMPLETING.includes(t.status)) notes.push(...invalidate(t, 'put on hold.', ctx));
+          if (status === 'On hold' && t.status !== 'On hold') t.heldFrom = t.status;
         }
         t.status = status;
         return notes;
@@ -234,7 +248,9 @@
         const changed = assignee.dev !== t.dev || (assignee.devId || '') !== (t.devId || '');
         const notes = [];
         Object.assign(t, assignee); t.priority = input.priority;
-        if (EARLY.includes(t.status)) t.status = 'Assigned';
+        if (EARLY.includes(t.status)) { t.status = t.project ? 'Planning' : 'Assigned'; delete t.heldFrom; }
+        // A new worker confirms for themselves: the earlier worker's confirmation of an unlocked draft no longer counts.
+        if (changed && t.agreementDraft && t.agreementDraft.worker) { t.agreementDraft.worker = null; notes.push('The earlier worker\'s confirmation of the agreement draft was cleared.'); }
         const self = actorOf(ctx, t).name === t.dev && admin && ctx.isWorker && ctx.isWorker(t);
         notes.push(`${ctx.view} ${self ? 'assigned it to themselves' : `assigned ${t.dev}`}. Priority: ${t.priority}.`);
         if (changed && t.status === 'Awaiting acceptance') { notes.push(...invalidate(t, `reassigned to ${t.dev}.`, ctx)); t.status = 'In progress'; }
@@ -330,6 +346,7 @@
         inState(t.project && ACTIVE_WORK.includes(t.status));
         const index = input.index === null || input.index === undefined ? null : Number(input.index);
         if (index !== null && !t.tasks[index]) fail('invalid', 'That task no longer exists. Refresh and try again.');
+        if (index === null && t.tasks.length >= MAX_TASKS) fail('invalid', `Keep a project to ${MAX_TASKS} tasks.`);
         const next = readTask(input.task, ctx.owners);
         const error = TL.validateTask(next); if (error) fail('invalid', error);
         const target = t.dueDate || t.date;
@@ -409,7 +426,7 @@
   }
   function meetingInput(input) {
     const meeting = text(input.meeting, 'Date and time', { max: 40 });
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(meeting)) fail('invalid', 'Enter the meeting date and time.');
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(meeting) || !isDate(meeting.slice(0, 10))) fail('invalid', 'Enter the meeting date and time.');
     return { meeting, location: text(input.location, 'Location', { max: 200 }) };
   }
 
@@ -418,6 +435,7 @@
     const r = roles(ctx, t);
     allow(r.any || r.reviewer);
     inState(Boolean(t.project), 'Scope changes are linked to tickets that have a project.');
+    inState(!FINAL.includes(t.status), 'This request has ended. Submit a new request for further work.');
     const c = { ...input, id: nextId, ticket: t.id, status: 'Submitted', impact: '', history: [] };
     text(c.title, 'Change summary', { max: 150 });
     text(c.reason, 'Business reason');
@@ -431,7 +449,9 @@
   function changeAction(c, t, action, input = {}, ctx) {
     const r = roles(ctx, t);
     const { admin, worker } = r;
-    const req = r.req || r.reviewer;
+    // The Requestor side of a scope change is independent too: an account that is also the worker cannot agree to or
+    // accept its own work; a different Admin reviews instead.
+    const req = (r.req && !(ctx.sameParty && ctx.sameParty(t))) || r.reviewer;
     const moved = 'This change has moved on since it was opened. Refresh and try again.';
     const completeTask = ticket => { const task = ticket.tasks.find(x => x.title.startsWith(c.id + ':')); if (task) task.done = true; return []; };
     switch (action) {
@@ -444,7 +464,7 @@
           Released: worker && c.status === 'Accepted',
           Closed: admin && c.status === 'Released'
         };
-        if (!(to in rules)) fail('invalid', 'Unknown change status.');
+        if (!Object.hasOwn(rules, String(to))) fail('invalid', 'Unknown change status.');
         allow({ Assessment: admin, 'In progress': worker, Accepted: req, Released: worker, Closed: admin }[to]);
         inState(rules[to], moved);
         c.status = to;
@@ -469,6 +489,7 @@
       case 'approve': {
         allow(admin, 'Only an Admin approves scope changes.');
         inState(c.status === 'Awaiting approval' && c.requestorAgreed, 'The requestor must agree before approval.');
+        inState(!FINAL.includes(t.status), 'The linked request has ended, so this change cannot be approved. Reject it instead.');
         const approval = record(ctx, t);
         c.status = 'Approved'; c.approvedBy = approval.name; c.approvedAt = approval.time;
         return {
@@ -476,7 +497,7 @@
           ticketEffect: ticket => {
             const notes = [];
             ticket.tasks.push({ title: `${c.id}: ${c.title}`, done: false });
-            const open = !['Closed', 'Released'].includes(ticket.status);
+            const open = !FINAL.includes(ticket.status);
             const previous = ticket.dueDate || ticket.date;
             if (open) { ticket.date = c.date; ticket.dueDate = c.date; }
             // A new agreement version; the earlier versions are kept unchanged.
@@ -490,7 +511,8 @@
               Object.assign(ticket, { requirements: agreementOf(ticket).requirements, criteria: agreementOf(ticket).criteria });
             }
             notes.push(`${c.id} approved and added to the project plan${prior ? ` as agreement v${prior.version + 1}` : ''}.${open && previous !== c.date ? ` Delivery target changed from ${previous || 'not set'} to ${c.date}.` : ''}`);
-            if (['Awaiting acceptance', 'Ready for release'].includes(ticket.status)) {
+            // Approved scope changes the deliverable, at any stage before closure: earlier confirmations no longer apply.
+            if (COMPLETING.includes(ticket.status)) {
               notes.push(...invalidate(ticket, `the agreed scope changed (${c.id}).`, ctx));
               ticket.status = 'In progress';
             }
@@ -501,11 +523,11 @@
       case 'decision': {
         const next = input.status;
         const rules = {
-          Deferred: admin && ['Assessment', 'Awaiting approval', 'Deferred'].includes(c.status),
-          Rejected: admin && ['Assessment', 'Awaiting approval', 'Deferred'].includes(c.status),
+          Deferred: admin && ['Submitted', 'Assessment', 'Awaiting approval', 'Deferred'].includes(c.status),
+          Rejected: admin && ['Submitted', 'Assessment', 'Awaiting approval', 'Deferred'].includes(c.status),
           'In progress': req && c.status === 'Awaiting acceptance'
         };
-        if (!(next in rules)) fail('invalid', 'Unknown decision.');
+        if (!Object.hasOwn(rules, String(next))) fail('invalid', 'Unknown decision.');
         allow(next === 'In progress' ? req : admin);
         inState(rules[next], moved);
         const reason = text(input.reason, 'Reason', { max: 2000 });
@@ -632,7 +654,7 @@
   // The next step on a linked scope change (for action lists).
   const nextChangeStep = (c, t, contexts = []) => pick(CHANGE_STEPS, t, (s, input, ctx) => changeAction(copy(c), copy(t), s.action, input, ctx), contexts);
 
-  const api = { WorkflowError, VIEWS, STAFF, TYPES, STAGES, SAMPLE_DEVELOPER, SIM_ADMIN, IDENTITIES, DEPARTMENTS, CATEGORIES, PRIORITIES, CHANGE_STATUSES, EARLY, FINAL, COMPLETING, MAX_EVIDENCE, validateProjectTasks, createTicket, ticketAction, createChange, changeAction, simulatedContext, roles, typeOf, agreementOf, completionOf, activeEvidence, bothConfirmed, closable, stageOf, missingSteps, safeUrl, nextStep, nextChangeStep };
+  const api = { WorkflowError, VIEWS, STAFF, TYPES, STAGES, SAMPLE_DEVELOPER, SIM_ADMIN, IDENTITIES, DEPARTMENTS, CATEGORIES, PRIORITIES, CHANGE_STATUSES, CHANGE_SETTLED, MAX_TASKS, EARLY, FINAL, COMPLETING, MAX_EVIDENCE, validateProjectTasks, createTicket, ticketAction, createChange, changeAction, simulatedContext, roles, typeOf, agreementOf, completionOf, activeEvidence, bothConfirmed, closable, stageOf, missingSteps, safeUrl, nextStep, nextChangeStep };
   if (typeof module !== 'undefined') module.exports = api;
   else root.WorkflowCore = api;
 })(typeof window !== 'undefined' ? window : globalThis);

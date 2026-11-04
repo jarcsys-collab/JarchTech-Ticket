@@ -1,8 +1,13 @@
 # JarcTech Ticket
 
-A working local prototype for JARC Technologies ticket intake, admin assignment, developer planning, and shared project Gantt tracking.
+Request, project, and delivery tracking for JARC Technologies: ticket intake, Admin assignment, developer planning, project Gantt tracking, and dual-confirmation closure.
 
-## Start here
+**Official app:** https://jarctech-ticket-production.up.railway.app (sign in with a company Microsoft account).
+**Operating it** (backups, rollback, remaining risks, Admin onboarding): [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+The official deployment always runs with Microsoft sign-in and the server-stored workspace. Everything below about the browser-only demo, the beta simulation, and inspection applies to local and test configurations only: a deployed server refuses to start with them.
+
+## Run it locally
 
 1. Extract this ZIP. Open the folder containing this README and `package.json`.
 2. Install Node.js 22 or newer if needed.
@@ -46,9 +51,9 @@ Read [the Windows setup guide](docs/GETTING-STARTED.md), then [the phased build 
 
 **Extract the ZIP before adding code to GitHub. Upload or commit its contents, not the ZIP itself.** The repository root should contain `package.json`, `server.cjs`, `CLAUDE.md`, `public/`, and `docs/`.
 
-## Backend foundation (not used by the UI yet)
+## Backend foundation
 
-The server can connect to MongoDB and report its health, but **the UI still stores records only in the browser**. No ticket API exists yet, and nothing is read from or written to the database except a connection check (`ping`).
+The server connects to MongoDB and reports its health. Without database settings on a local machine it serves the browser-only demo, which keeps records only in the browser.
 
 - **Without database settings:** `npm start` runs exactly as the browser-only prototype.
 - **With database settings:** set `MONGODB_URI` and `MONGODB_DB_NAME` in a local `.env` (copy [`.env.example`](.env.example)) or as Railway variables, and the server checks the connection at start-up. Point local development at a development database, never production.
@@ -61,7 +66,7 @@ The server can connect to MongoDB and report its health, but **the UI still stor
 - **`.env` precedence:** settings already in the environment win over `.env`. Tests and the browser walkthrough never read `.env`; they set `NODE_ENV=test` or `JARCTECH_ENV_FILE=none`.
 - **Railway:** `railway.json` sets the start command and uses `/readyz` as the deploy health check. Nothing has been deployed.
 
-## Microsoft Entra sign-in (implemented; not yet configured with real credentials)
+## Microsoft Entra sign-in
 
 There are two modes, chosen with `AUTH_MODE`:
 
@@ -241,7 +246,9 @@ npm.cmd run db:migrate-request-types -- --confirm-db jarctech_ticket_dev --dry-r
 
 Then start with `npm.cmd start` and open http://localhost:4177. You'll see the sign-in page.
 
-## Railway staging
+## Railway deployment
+
+The official app runs on the Railway service first set up for staging; its database keeps the historic name `jarctech_ticket_staging`. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the current settings.
 
 Railway builds from GitHub (`jarcsys-collab/JarchTech-Ticket`, `main`) using `railway.json`:
 
@@ -305,9 +312,9 @@ npm.cmd run walkthrough
 $env:WALKTHROUGH_SCREENSHOTS = 'tmp'; npm.cmd run walkthrough
 ```
 
-### Shared beta simulation workspace (`BETA_SIMULATION=enabled`)
+### Shared beta simulation workspace (`BETA_SIMULATION=enabled`): local and test only
 
-An explicit beta capability for signed-in mode, off unless `BETA_SIMULATION=enabled`. Every signed-in beta member works in **one shared workspace labeled "Beta simulation — test data"**. Tickets, projects, dated tasks, comments, activity, and linked scope changes are **stored in MongoDB** (`beta_tickets`, `beta_changes`), so they survive refreshes, sign-out, and redeployments, and appear across browsers and devices.
+A capability for signed-in mode on a local machine, off unless `BETA_SIMULATION=enabled`, and refused when deployed. Every signed-in beta member works in **one shared workspace labeled "Beta simulation — test data"**. Tickets, projects, dated tasks, comments, activity, and linked scope changes are **stored in MongoDB** (`beta_tickets`, `beta_changes`), so they survive refreshes, sign-out, and redeployments, and appear across browsers and devices.
 
 **Simulated views:**
 - **Switching:** the header's **Simulation view** switches freely between **Requestor**, **Admin**, and **Developer**, and the choice is remembered in the browser.
@@ -371,9 +378,9 @@ npm.cmd run beta:seed -- --confirm-db <database> --replace    # replaces only th
 
 `npm.cmd run walkthrough:beta` checks all of this in a real headless browser with two separate browser contexts, a **mock** Entra provider, and a **temporary** MongoDB. `npm.cmd run walkthrough:features` does the same for attachments, notifications, and search/filters. Set `BETA_SCREENSHOTS` to save screenshots.
 
-### Beta inspection mode (`INSPECTION_MODE=enabled`)
+### Inspection mode (`INSPECTION_MODE=enabled`): local and test only
 
-An explicit beta option for signed-in mode, off unless `INSPECTION_MODE=enabled`. It lets anyone signed in try every role's workflow without changing real roles.
+An option for signed-in mode on a local machine, off unless `INSPECTION_MODE=enabled`, and refused when deployed. It lets anyone signed in try every role's workflow without changing real roles.
 
 - **Entering:** a **Preview views** button in the header offers **Requestor**, **Admin**, and **Developer**. While inspecting, the header's **Preview views** switch changes the view at any time, and a persistent **"Inspection mode — sample data"** banner offers **Exit inspection** and **Reset sample data** (with confirmation).
 - **Sample data only:** inspection runs the prototype on **sample records stored only in that browser**, under their own storage prefix (`jarc-inspection:`). Normal browser records (`jarc-helpdesk-v1`) and their recovery backups are never read or written while inspecting. The sample copy has its own recovery screen.
@@ -482,13 +489,13 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `.env.example` | Server settings with placeholders only; copy to the Git-ignored `.env` for local use |
 | `docs/reference/annotated-review.pdf` | User-supplied annotated visual reference, retained unchanged |
 
-## Prototype boundaries
+## Local demo and limits
 
 Without sign-in (the local demo), all records are in this browser's localStorage (`jarc-helpdesk-v1`), not on the server. Separate browsers, devices, hostnames, and ports have separate data. The ZIP includes code and sample data, not your browser's working records. Existing local records are preserved; tasks without dates are labeled unscheduled. Fresh demo schedules are illustrative, not agreed business commitments.
 
 If the stored records cannot be read or are missing required fields, the app opens a recovery screen instead of loading sample data. The original value is left untouched, an exact copy is saved under a `jarc-helpdesk-v1-backup-<timestamp>` key when possible, and automatic saving is paused. You can download the stored value, try again, or explicitly reset to sample data; backups are kept after a reset. If a save fails (for example, storage is full), the app warns that recent changes exist only in the open tab.
 
-With Microsoft Entra sign-in, My workspace tickets are stored on the server with server-enforced roles and ownership (see above). Calendar integration is not built, and email is optional and off by default. It is a beta: do not treat it as a production system until it has had a security review.
+With Microsoft Entra sign-in, My workspace tickets are stored on the server with server-enforced roles and ownership (see above). Calendar integration is not built, and email is optional and off by default. Remaining risks are listed in docs/OPERATIONS.md: do not treat it as a production system until it has had a security review.
 
 The current request form fields are intentionally retained. Category-specific forms await the owner's category definitions.
 

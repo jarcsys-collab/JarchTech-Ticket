@@ -80,7 +80,7 @@ const HELPERS = `window.__w={
   submit(sel){__w.el(sel).requestSubmit()},
   view(r){__w.set('#demo-role',r)},
   open(id){__w.click('[data-id="'+id+'"]')},
-  esc(){document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
+  esc(){for(let i=0;i<2;i++)document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
   toast(){return document.querySelector('#toast').textContent},
   saveState(){return document.querySelector('.save').dataset.state||''},
   text(){return document.querySelector('#dialog-content').textContent},
@@ -222,7 +222,7 @@ try {
     check('the panel says email is not enabled', await P2.w(`__w.text().includes('not enabled, so notifications are in-app only')`));
     await P2.w(`__w.esc();__w.click('#settings');true`);
     await waitFor(P2, `!!document.querySelector('#prefs-form')`);
-    check('Settings explains that email delivery is not enabled', await P2.w(`__w.text().includes('Email delivery is not enabled')`));
+    check('Settings labels email delivery as not available', await P2.w(`__w.text().includes('email delivery is not set up') && document.querySelector('#prefs-form [name=emailReminders]').disabled`));
     await P2.do(`__w.set('#prefs-form [name=emailReminders]',true);__w.submit('#prefs-form')`);
     check('the email preference is saved for when email is enabled', (await users.findOne({ email: 'member3@jarc.example' })).emailReminders === true);
 

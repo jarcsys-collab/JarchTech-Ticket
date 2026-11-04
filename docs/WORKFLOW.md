@@ -6,7 +6,9 @@
 - **Developer:** the IT worker assigned to a request. Sees assigned work plus their own requests. Plans, holds the requirements meeting, records the agreement, builds the timeline, does the work, supplies evidence, and confirms their own completion. No assignment authority and no user management.
 - **Admin:** sees every request, manages users and roles, reviews and assigns work (to an active Developer or themselves), approves scope changes, and performs final closure. An Admin who assigns work to themselves is its worker.
 
-New accounts are Requestors. Every rule is enforced on the server (lists, search, details, actions, files, notifications, direct links).
+New accounts are Requestors. Every rule is enforced on the server (lists, search, details, actions, files, notifications, direct links). A colleague must sign in once before their account appears under Users, where any Admin can make them a Developer or an Admin, or return them to Requestor. Changes apply at once and are recorded. A notification about a record its reader can no longer see keeps its title but not its text.
+
+If the Requestor's account is disabled, an Admin other than the worker reviews for them, as for self-requested work. If the worker can no longer act, Admins are asked to reassign it.
 
 ## Request types
 

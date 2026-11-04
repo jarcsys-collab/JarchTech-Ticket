@@ -62,7 +62,9 @@ function ticketEvents(before, after, action, input = {}) {
       'In progress': [e('returned', 'Returned for correction: confirmations cleared', 'developer', 'admin', 'requestor')],
       Cancelled: [e('status', 'Request cancelled', 'admin', 'developer')]
     }[input.status] || [];
-    case 'status': return {
+    case 'status':
+      if (before.status === 'On hold') return [e('status', 'Resumed', 'requestor', 'developer')];
+      return {
       'Under review': before.status === 'Waiting for information' ? [e('status', 'Information provided', 'admin')] : [e('status', 'Under review', 'requestor')],
       'In progress': [e('status', 'Work started', 'requestor')],
       Released: [e('status', 'Released or handed over: ready for Admin closure', 'admin', 'requestor')],
@@ -126,7 +128,9 @@ function build({ events, record, kind, target, version, ticket, before, text, ac
   return docs;
 }
 
-function createNotifications({ db, workspace, collection = 'beta_notifications', addressing = simulated, log = console, stamp }) {
+// readable(user, docs): the set of ticket ids this reader may still see, so a notification about a record they lost
+// access to (reassigned, or a changed role) keeps its generic title but not its text.
+function createNotifications({ db, workspace, collection = 'beta_notifications', addressing = simulated, log = console, stamp, readable = null }) {
   const notes = db.collection(collection);
   const toClient = (d, uid) => ({ id: d._id.toHexString(), type: d.type, title: d.title, text: d.text, record: d.record, kind: d.kind, target: d.target, ticket: d.ticket, actor: d.actorName || 'JarcTech Ticket', actorView: d.actorView || 'Reminder', reminder: Boolean(d.reminder), time: stamp(d.createdAt), at: d.createdAt, read: d.readBy.includes(uid) });
 
@@ -181,7 +185,9 @@ function createNotifications({ db, workspace, collection = 'beta_notifications',
     const docs = await notes.find(filter).sort({ createdAt: -1, _id: -1 }).limit(limit + 1).toArray();
     const page = docs.slice(0, limit);
     const last = page[page.length - 1];
-    return { inbox: addressing.label(user, view), items: page.map(d => toClient(d, uid)), unread: await unread(user, view), next: docs.length > limit && last ? `${last.createdAt.toISOString()}_${last._id.toHexString()}` : null };
+    const allowed = readable ? await readable(user, page) : null;
+    const shown = d => (allowed && !allowed.has(d.ticket) ? { ...toClient(d, uid), text: `${d.record}: this record is no longer available to you.`, unavailable: true } : toClient(d, uid));
+    return { inbox: addressing.label(user, view), items: page.map(shown), unread: await unread(user, view), next: docs.length > limit && last ? `${last.createdAt.toISOString()}_${last._id.toHexString()}` : null };
   }
 
   // Marks some (ids) or all notifications in the member's inboxes as read for this member only.

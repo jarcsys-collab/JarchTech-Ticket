@@ -85,7 +85,7 @@ const HELPERS = `window.__w={
   submit(sel){__w.el(sel).requestSubmit()},
   view(r){__w.set('#demo-role',r)},
   open(id){__w.click('[data-id="'+id+'"]')},
-  esc(){document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
+  esc(){for(let i=0;i<2;i++)document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
   toast(){return document.querySelector('#toast').textContent},
   saveState(){return document.querySelector('.save').dataset.state||''},
   text(){return document.querySelector('#dialog-content').textContent},
@@ -261,6 +261,14 @@ try {
     await P1.do(`__w.click('[data-action="Released"]')`);
     await as(P1, 'Admin', 'JRC-1043');
     await P1.do(`__w.click('[data-action="Closed"]')`);
+    check('an open scope change holds up closure', await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='Released')`) && await P1.w(`__w.toast().includes('CR-202 is still open')`), await P1.w(`__w.toast()`));
+    // Deliver the approved change, then close.
+    await onChange('Developer', `__w.click('[data-cstatus="In progress"]')`);
+    await onChange('Developer', `__w.set('#change-test [name=results]','Passed.');__w.set('#change-test [type=checkbox]',true);__w.submit('#change-test')`);
+    await onChange('Requestor', `__w.click('[data-cstatus="Accepted"]')`);
+    await onChange('Developer', `__w.click('[data-cstatus="Released"]')`);
+    await as(P1, 'Admin', 'JRC-1043');
+    await P1.do(`__w.click('[data-action="Closed"]')`);
     check('after both confirmations and the handover, the Admin closes it', await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='Closed')`));
     check('activity history shows the signed-in actor and the simulated view', await P1.w(`__w.text().includes('Member One (Admin view)') && __w.text().includes('Member One (Developer view)')`));
     await P1.shot('04-beta-closed.png');
@@ -303,7 +311,7 @@ try {
     check('after refresh: shared records reload from the server and the simulation view is remembered', await P1.w(`document.querySelector('#demo-role').value==='Admin' && !!document.querySelector('[data-id="JRC-1043"]')`) && await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='Closed')`));
     await P1.loads(() => P1.w(`__w.click('#sign-out')`));
     await signIn(P1, 1, 'Member One');
-    check('after signing out and in again: records are still there', await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='Closed')`) && await P1.w(`__w.change('CR-202').then(c=>c.status==='Approved')`));
+    check('after signing out and in again: records are still there', await P1.w(`__w.ticket('JRC-1043').then(t=>t.status==='Closed')`) && await P1.w(`__w.change('CR-202').then(c=>c.status==='Released')`));
 
     // ---------- Two browser contexts ----------
     section = 'two contexts';

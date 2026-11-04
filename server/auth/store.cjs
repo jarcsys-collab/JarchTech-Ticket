@@ -84,6 +84,8 @@ function createStore(db, { now = () => new Date() } = {}) {
     const existing = await users.findOne({ email });
     if (existing) {
       if (existing.status === 'disabled') return { denied: 'disabled' };
+      // The same person's simultaneous first sign-in created this account a moment ago.
+      if (existing.entraObjectId === claims.oid && existing.tenantId === tenantId) return { user: existing };
       if (existing.entraObjectId) return { denied: 'account-conflict' }; // same email, different Microsoft account
       return { user: null }; // an invitation: bound below exactly as in invite-only mode
     }
@@ -129,8 +131,24 @@ function createStore(db, { now = () => new Date() } = {}) {
 
   const deleteSession = token => token ? sessions.deleteOne({ _id: sha256(token) }) : null;
 
+  // Every account, with how much open work is still assigned to it, so an Admin can see what needs reassigning.
   async function listUsers() {
-    return (await users.find({}, { sort: { email: 1 } }).toArray()).map(publicUser);
+    const open = await db.collection('tickets').aggregate([
+      { $match: { workspace: 'main', devId: { $type: 'string' }, status: { $nin: ['Closed', 'Rejected', 'Cancelled'] } } },
+      { $group: { _id: '$devId', n: { $sum: 1 } } }
+    ]).toArray();
+    const counts = new Map(open.map(x => [x._id, x.n]));
+    return (await users.find({}, { sort: { email: 1 } }).toArray()).map(u => ({ ...publicUser(u), openAssigned: counts.get(String(u._id)) || 0 }));
+  }
+
+  // Recent account changes for the Users screen: who changed what, newest first. Sign-ins and record contents are left out.
+  const AUDIT_TYPES = ['user.updated', 'user.invited', 'user.activated', 'user.auto-admitted', 'admin.bootstrapped'];
+  async function auditLog(limit = 25) {
+    const list = await events.find({ type: { $in: AUDIT_TYPES } }, { sort: { at: -1 }, limit }).toArray();
+    const ids = [...new Set(list.flatMap(e => [e.actorId, e.subjectId]).filter(Boolean).map(String))].map(x => new ObjectId(x));
+    const people = new Map((await users.find({ _id: { $in: ids } }, { projection: { email: 1, displayName: 1 } }).toArray()).map(u => [String(u._id), u.displayName || u.email]));
+    const who = id => (id ? people.get(String(id)) || 'A removed account' : null);
+    return list.map(e => ({ type: e.type, at: e.at, actor: who(e.actorId), subject: who(e.subjectId) || e.email || null, changes: e.changes || null, previous: e.previous || null, role: e.role || null }));
   }
 
   async function inviteUser({ email, role, displayName }, actor) {
@@ -182,7 +200,7 @@ function createStore(db, { now = () => new Date() } = {}) {
     await record('user.preferences', { actorId: user._id, subjectId: user._id, emailReminders: emailReminders === true });
   }
 
-  return { setPreferences, admit, createSession, getSession, deleteSession, listUsers, inviteUser, updateUser, publicUser, record };
+  return { setPreferences, admit, createSession, getSession, deleteSession, listUsers, auditLog, inviteUser, updateUser, publicUser, record };
 }
 
 module.exports = { ABSOLUTE_MS, AUTO_ADMIT_ROLE, CONSUMER_TENANT, IDLE_MS, StoreError, createStore, isGuest };

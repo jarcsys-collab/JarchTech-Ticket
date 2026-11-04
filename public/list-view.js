@@ -92,7 +92,7 @@ function records() {
   if (!shared) return showList(ListFilter.page(visible(), query, deadlineCtx()));
   const seq = ++listSeq;
   $('#records').setAttribute('aria-busy', 'true');
-  $('#result-count').textContent = 'Searching shared records…';
+  $('#result-count').textContent = 'Searching…';
   server.search({ ...query.filters, scope, page: query.page, pageSize: query.pageSize, view: role }).then(r => {
     if (seq !== listSeq) return; // a newer search replaced this one
     if (!r.ok) return showList({ error: r.message });
@@ -133,7 +133,7 @@ function showList(r) {
     el.querySelectorAll('[data-id]').forEach(x => {
       const openRecord = () => view === 'Projects' ? projectView(x.dataset.id) : detail(x.dataset.id);
       x.onclick = openRecord;
-      x.onkeydown = e => { if (e.key === 'Enter') openRecord(); };
+      x.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openRecord(); } };
     });
   }
   $('#pager').innerHTML = pages > 1 ? `<nav class="pager" aria-label="${noun} pages"><button class="secondary" id="prev-page" ${page <= 1 ? 'disabled' : ''}>← Previous</button><span>Page ${page} of ${pages}</span><button class="secondary" id="next-page" ${page >= pages ? 'disabled' : ''}>Next →</button></nav>` : '';
