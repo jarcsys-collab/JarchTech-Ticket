@@ -93,7 +93,7 @@ function pageApi(cdp) {
   const loads = async action => { const l = cdp.event('Page.loadEventFired'); await action(); await l; await sleep(300); };
   const nav = url => loads(() => cdp.send('Page.navigate', { url }));
   const shot = async name => { if (!SHOTS) return; const r = await cdp.send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(path.join(SHOTS, name), Buffer.from(r.data, 'base64')); };
-  const key = async (key, code = key, modifiers = 0) => { await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, modifiers, windowsVirtualKeyCode: { Tab: 9, Escape: 27, Enter: 13, ' ': 32 }[key] }); await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, modifiers }); await sleep(120); };
+  const key = async (key, code = key, modifiers = 0) => { await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, modifiers, windowsVirtualKeyCode: { Tab: 9, Escape: 27, Enter: 13, ' ': 32 }[key], ...(key === 'Enter' ? { text: '\r' } : {}) }); await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, modifiers }); await sleep(120); };
   return { cdp, w, settle, loads, nav, shot, key, do: async js => { await w(js + ';true'); await settle(); } };
 }
 const account = (n, name) => ({ sub: `sub-${n}`, oid: `00000000-0000-4000-b000-${String(n).padStart(12, '0')}`, name, email: `staff${n}@jarc.example`, preferred_username: `staff${n}@jarc.example` });
@@ -435,6 +435,37 @@ try {
     check('an unrelated Requestor gets 404', await OTHER.w(`fetch(${JSON.stringify(fileUrl)}).then(r=>r.status)`) === 404);
     check('and so does the unassigned Developer', await DEV.w(`fetch(${JSON.stringify(fileUrl)}).then(r=>r.status)`) === 404);
     await REQ.do(`close()`);
+
+    section = 'notification bell';
+    const bellChecks = async (P, where) => {
+      const m = await P.w(`(()=>{const b=document.querySelector('#notifications'),s=b.querySelector('svg'),r=b.getBoundingClientRect(),i=s.getBoundingClientRect(),o=document.querySelector('#settings').getBoundingClientRect();return {w:r.width,h:r.height,iw:i.width,ih:i.height,offX:(i.left+i.width/2)-(r.left+r.width/2),offY:(i.top+i.height/2)-(r.top+r.height/2),vs:(r.top+r.height/2)-(o.top+o.height/2),right:r.right,hidden:s.getAttribute('aria-hidden'),text:b.textContent,color:getComputedStyle(s).color,label:b.getAttribute('aria-label')}})()`);
+      check(`${where}: a crisp 20 px SVG bell replaces the old glyph`, m.iw === 20 && m.ih === 20 && m.hidden === 'true' && !m.text.includes('♧'), JSON.stringify(m));
+      check(`${where}: the touch target is at least 44 by 44 px`, m.w >= 44 && m.h >= 44, JSON.stringify(m));
+      check(`${where}: the bell lines up with the header buttons`, Math.abs(m.vs) <= 1 && Math.abs(m.offY) <= 1 && m.right <= await P.w('innerWidth'), JSON.stringify(m));
+      check(`${where}: the accessible label starts with "Notifications"`, /^Notifications/.test(m.label), m.label);
+      return m;
+    };
+    await reload(REQ);
+    await waitFor(REQ, `document.querySelector('#notice-count').textContent!==''`);
+    await bellChecks(REQ, 'desktop');
+    check('the unread badge still shows, and the label counts it', await REQ.w(`Number(document.querySelector('#notice-count').textContent)>0 && /^Notifications: \\d+ unread$/.test(document.querySelector('#notifications').getAttribute('aria-label')) && getComputedStyle(document.querySelector('#notice-count')).display!=='none'`));
+    check('an empty badge takes no space', await OTHER.w(`(async()=>{await JARC_SERVER.markRead(role,'all');document.querySelector('#notice-count').textContent='';const b=document.querySelector('#notifications').getBoundingClientRect();const i=document.querySelector('#notifications svg').getBoundingClientRect();return Math.abs((i.left+i.width/2)-(b.left+b.width/2))<=1})()`));
+    await REQ.w(`document.activeElement.blur();true`);
+    for (let i = 0; i < 25 && !await REQ.w(`document.activeElement&&document.activeElement.id==='notifications'`); i++) await REQ.key('Tab');
+    check('the keyboard reaches it, with a visible focus ring', await REQ.w(`(()=>{const b=document.activeElement,s=getComputedStyle(b);return b.id==='notifications'&&b.matches(':focus-visible')&&s.outlineStyle==='solid'&&parseFloat(s.outlineWidth)>=2})()`));
+    await REQ.shot('official-09-bell-focus.png');
+    await REQ.key('Enter');
+    check('Enter opens the notification panel', await waitFor(REQ, `!!document.querySelector('#notification-list') && !document.querySelector('#overlay').hidden`));
+    await sleep(150);
+    await REQ.key('Escape');
+    check('closing returns focus to the bell', await waitFor(REQ, `!!document.querySelector('#notification-list') && document.querySelector('#overlay').hidden && document.activeElement.id==='notifications'`));
+    await REQ.cdp.send('Emulation.setDeviceMetricsOverride', { width: 360, height: 700, deviceScaleFactor: 2, mobile: true });
+    await reload(REQ);
+    await waitFor(REQ, `document.querySelector('#notice-count').textContent!==''`);
+    await bellChecks(REQ, 'phone');
+    check('phone: no sideways page scroll', await REQ.w(`__w.overflow()<=1`));
+    await REQ.shot('official-10-bell-phone.png');
+    await REQ.cdp.send('Emulation.clearDeviceMetricsOverride');
 
     section = 'notifications';
     await reload(REQ);

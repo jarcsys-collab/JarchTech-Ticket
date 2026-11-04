@@ -12,6 +12,7 @@ tr[data-id]:focus-visible td{outline:2px solid #8ed8da;outline-offset:-2px;backg
 .pager button:disabled,.actions button:disabled{opacity:.5;cursor:default}
 .actions.centered{justify-content:center}
 .icon-button span:empty{display:none}
+.icon-button{display:inline-flex;align-items:center;justify-content:center;gap:3px;min-width:44px;min-height:44px;color:#304b52;border-radius:8px}.bell-icon{flex:none;display:block}
 /* Notifications */
 .notifications{list-style:none;padding:0;margin:18px 0 0}
 .notification{display:flex;gap:10px;align-items:flex-start;border-bottom:1px solid #e9efef;padding:4px 0}
