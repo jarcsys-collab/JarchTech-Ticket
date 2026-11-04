@@ -253,6 +253,8 @@ const labelText = el => {
 };
 function messageFor(el) {
   const v = el.validity, label = labelText(el);
+  if (el.dataset.missing && v.valueMissing) return el.dataset.missing;
+  if (el.dataset.unknown && v.customError) return el.dataset.unknown;
   if (v.valueMissing) return el.type === 'checkbox' ? `Confirm: ${label}` : el.tagName === 'SELECT' ? `Choose ${label.toLowerCase()}.` : `Enter ${label.toLowerCase()}.`;
   if (v.typeMismatch && el.type === 'url') return 'Enter a complete link that starts with https:// or http://.';
   if (v.typeMismatch && el.type === 'email') return 'Enter a work email address, like name@jarcgroup.ph.';

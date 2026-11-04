@@ -82,7 +82,7 @@ const HELPERS = `window.__w={
   el(sel,root=document){const e=root.querySelector(sel);if(!e)throw new Error('missing '+sel);return e},
   set(sel,val,root=document){const e=__w.el(sel,root);if(e.type==='checkbox')e.checked=val;else e.value=val;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))},
   click(sel){__w.el(sel).click()},
-  submit(sel){__w.el(sel).requestSubmit()},
+  submit(sel){if(sel==='#request-form')for(const [n,v] of [['department','SALES'],['category','MONDAY']]){const e=document.querySelector('#request-form [name='+n+']');if(e&&!e.value)__w.set('#request-form [name='+n+']',v)}__w.el(sel).requestSubmit()},
   view(r){__w.set('#demo-role',r)},
   open(id){__w.click('[data-id="'+id+'"]')},
   esc(){for(let i=0;i<2;i++)document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
@@ -170,7 +170,7 @@ try {
     await P1.do(`__w.set('[name=title]','Beta shared request');__w.set('[name=date]','2026-12-15');__w.set('[name=description]','Need shared data.');__w.set('[name=criteria]','Visible to everyone.');__w.submit('#request-form')`);
     check('a request without a type is not submitted', await P1.w(`__w.ticket('JRC-1043').then(t=>!t)`));
     await P1.do(`__w.set('[name=type]','Project');__w.submit('#request-form')`);
-    check('Requestor submits a Project; stored on the server with actor, view, type, and its separate category', await P1.w(`__w.ticket('JRC-1043').then(t=>!!t&&t.status==='Submitted'&&t.type==='Project'&&t.category==='New feature'&&t.requester.name==='Member One'&&t.history[0].actor==='Member One'&&t.history[0].view==='Requestor')`) && await P1.w(`__w.toast().includes('JRC-1043 created')`));
+    check('Requestor submits a Project; stored on the server with actor, view, type, and its separate category', await P1.w(`__w.ticket('JRC-1043').then(t=>!!t&&t.status==='Submitted'&&t.type==='Project'&&t.category==='MONDAY'&&t.requester.name==='Member One'&&t.history[0].actor==='Member One'&&t.history[0].view==='Requestor')`) && await P1.w(`__w.toast().includes('JRC-1043 created')`));
     await as(P1, 'Admin', 'JRC-1043');
     await P1.do(`__w.click('[data-action="Under review"]')`);
     await P1.do(`__w.click('[data-reason="Waiting for information"]');__w.set('#reason-form [name=reason]','Which columns?');__w.submit('#reason-form')`);
@@ -277,7 +277,7 @@ try {
     section = 'ticket and self-assignment';
     await as(P1, 'Requestor');
     await P1.w(`__w.click('#new-ticket'); true`); await sleep(200);
-    await P1.do(`__w.set('[name=title]','Printer reset');__w.set('[name=type]','Ticket');__w.set('[name=category]','Bug / issue');__w.set('[name=date]','2026-12-01');__w.set('[name=description]','Printer jams.');__w.submit('#request-form')`);
+    await P1.do(`__w.set('[name=title]','Printer reset');__w.set('[name=type]','Ticket');__w.set('[name=category]','POWERBI');__w.set('[name=date]','2026-12-01');__w.set('[name=description]','Printer jams.');__w.submit('#request-form')`);
     await as(P1, 'Admin', 'JRC-1044');
     await P1.do(`__w.set('#assignee','Alex Admin');__w.set('#priority','Low');__w.click('#assign')`);
     check('the Admin assigns the Ticket to themselves', await P1.w(`__w.ticket('JRC-1044').then(t=>t.dev==='Alex Admin'&&t.history.some(h=>h.text.includes('assigned it to themselves')))`));

@@ -79,7 +79,7 @@ const HELPERS = `window.__w={
   el(sel,root=document){const e=root.querySelector(sel);if(!e)throw new Error('missing '+sel);return e},
   set(sel,val,root=document){const e=__w.el(sel,root);if(e.type==='checkbox')e.checked=val;else e.value=val;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))},
   click(sel){__w.el(sel).click()},
-  submit(sel){__w.el(sel).requestSubmit()},
+  submit(sel){if(sel==='#request-form')for(const [n,v] of [['department','SALES'],['category','MONDAY']]){const e=document.querySelector('#request-form [name='+n+']');if(e&&!e.value)__w.set('#request-form [name='+n+']',v)}__w.el(sel).requestSubmit()},
   view(r){__w.set('#demo-role',r)},
   open(id){__w.click('[data-id="'+id+'"]')},
   esc(){for(let i=0;i<2;i++)document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))},
@@ -166,7 +166,7 @@ try {
     section = 'attachments';
     await P1.do(`__w.view('Requestor')`);
     await P1.w(`__w.click('#new-ticket');true`);
-    await P1.w(`__w.set('#request-form [name=title]','FEATURE-WT printer request');__w.set('#request-form [name=type]','Ticket');__w.set('#request-form [name=department]','Operations');__w.set('#request-form [name=date]','2026-12-18');__w.set('#request-form [name=description]','FEATURE-WT walkthrough request with screenshots.');true`);
+    await P1.w(`__w.set('#request-form [name=title]','FEATURE-WT printer request');__w.set('#request-form [name=type]','Ticket');__w.set('#request-form [name=department]','SYS');__w.set('#request-form [name=date]','2026-12-18');__w.set('#request-form [name=description]','FEATURE-WT walkthrough request with screenshots.');true`);
     await setFiles(P1, '#request-form input[type=file]', ['wt-screenshot.png', 'wt-tool.exe', 'wt-fake.png', 'wt-steps.txt']);
     await uploadsDone(P1);
     await waitFor(P1, `[...document.querySelectorAll('.upload')].filter(e=>!e.classList.contains('uploading')).length===4 && document.querySelectorAll('.upload.done').length===2`);
@@ -255,7 +255,7 @@ try {
 
     // ---------- Search and filters ----------
     section = 'search';
-    await P2.w(`Promise.all(Array.from({length:26},(_,i)=>new Promise(r=>setTimeout(r,i*40)).then(()=>fetch('/api/v1/beta/tickets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({view:'Requestor',requestId:'wt-bulk-'+i+'-'+Date.now(),input:{title:'FEATURE-WT bulk '+i,type:i%3?'Ticket':'Project',department:i%2?'IT':'Finance',date:'2026-12-20',category:'Enhancement',description:'Bulk search record '+i,criteria:''}})}).then(r=>{if(!r.ok)throw new Error('bulk create '+r.status)}))))`);
+    await P2.w(`Promise.all(Array.from({length:26},(_,i)=>new Promise(r=>setTimeout(r,i*40)).then(()=>fetch('/api/v1/beta/tickets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({view:'Requestor',requestId:'wt-bulk-'+i+'-'+Date.now(),input:{title:'FEATURE-WT bulk '+i,type:i%3?'Ticket':'Project',department:i%2?'SYS':'FINANCE',date:'2026-12-20',category:'EXCEL',description:'Bulk search record '+i,criteria:''}})}).then(r=>{if(!r.ok)throw new Error('bulk create '+r.status)}))))`);
     await reload(P2);
     const typeSearch = async (P, text) => { await P.w(`__w.set('.search',${JSON.stringify(text)});true`); await sleep(500); await waitFor(P, `!document.querySelector('#records[aria-busy]')`); };
     await typeSearch(P2, 'FEATURE-WT bulk');
@@ -264,7 +264,7 @@ try {
     check('results are paged', await P2.w(`document.querySelector('.pager span').textContent==='Page 1 of 2' && document.querySelectorAll('#records tr[data-id]').length===25`));
     await P2.w(`__w.click('#next-page');true`); await waitFor(P2, `!document.querySelector('#records[aria-busy]')`);
     check('the next page shows the rest', await P2.w(`document.querySelector('.pager span').textContent==='Page 2 of 2' && document.querySelectorAll('#records tr[data-id]').length===1`));
-    await P2.w(`__w.set('#department-filter','Finance');true`); await waitFor(P2, `!document.querySelector('#records[aria-busy]')`); await sleep(200);
+    await P2.w(`__w.set('#department-filter','FINANCE');true`); await waitFor(P2, `!document.querySelector('#records[aria-busy]')`); await sleep(200);
     await P2.w(`__w.set('#dev-filter','Unassigned');true`); await waitFor(P2, `!document.querySelector('#records[aria-busy]')`); await sleep(200);
     check('combined search, department, and Unassigned filters', await P2.w(`document.querySelector('#result-count').textContent`) === '13 matching tickets', await P2.w(`document.querySelector('#result-count').textContent`));
     await P2.w(`__w.set('#status-filter','Closed');true`); await waitFor(P2, `!document.querySelector('#records[aria-busy]')`); await sleep(200);

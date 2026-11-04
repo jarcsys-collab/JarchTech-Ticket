@@ -497,6 +497,6 @@ If the stored records cannot be read or are missing required fields, the app ope
 
 With Microsoft Entra sign-in, My workspace tickets are stored on the server with server-enforced roles and ownership (see above). Calendar integration is not built, and email is optional and off by default. Remaining risks are listed in docs/OPERATIONS.md: do not treat it as a production system until it has had a security review.
 
-The current request form fields are intentionally retained. Category-specific forms await the owner's category definitions.
+Departments and request categories are in `public/workflow-core.js` and described in docs/WORKFLOW.md. Forms that differ by category are not built.
 
 ![Project Gantt example](docs/screenshots/project-gantt.jpg)

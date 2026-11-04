@@ -71,7 +71,7 @@ const idOf = async n => String((await account(n))._id);
 const setRole = async (n, role) => db.collection('users').updateOne({ email: `person${n}@jarc.example` }, { $set: { role } });
 let rid = 0;
 const newRequest = async (cookie, overrides = {}) => {
-  const res = await post(`${W}/tickets`, cookie, { requestId: `official-${++rid}-${Date.now()}`, input: { title: 'OFFICIAL request', type: 'Ticket', department: 'IT', date: FUTURE, category: 'Enhancement', description: 'Official test.', criteria: 'Works.', ...overrides } });
+  const res = await post(`${W}/tickets`, cookie, { requestId: `official-${++rid}-${Date.now()}`, input: { title: 'OFFICIAL request', type: 'Ticket', department: 'SYS', date: FUTURE, category: 'EXCEL', description: 'Official test.', criteria: 'Works.', ...overrides } });
   assert.equal(res.status, 201, res.text);
   return res.json.created;
 };
@@ -186,10 +186,10 @@ test('3. a Developer sees assigned work; unrelated Requestors cannot reach it th
   assert.equal((await call(`${W}/attachments/${pending.json.attachment.id}/download`, { cookie: req })).status, 404);
   assert.equal((await send('DELETE', `${W}/attachments/${pending.json.attachment.id}`, req)).status, 404);
   // Attaching someone else's upload to your own request is refused.
-  const taken = await post(`${W}/tickets`, req, { requestId: `official-steal-${Date.now()}`, input: { title: 'x', type: 'Ticket', department: 'IT', date: FUTURE, category: 'Enhancement', description: 'x', attachments: [pending.json.attachment.id] } });
+  const taken = await post(`${W}/tickets`, req, { requestId: `official-steal-${Date.now()}`, input: { title: 'x', type: 'Ticket', department: 'SYS', date: FUTURE, category: 'EXCEL', description: 'x', attachments: [pending.json.attachment.id] } });
   assert.equal(taken.status, 409);
   // The requester field cannot be chosen by the client.
-  const forged = await post(`${W}/tickets`, stranger, { requestId: `official-forged-${Date.now()}`, requester: { id: devId }, input: { title: 'x', name: 'Someone Else', type: 'Ticket', department: 'IT', date: FUTURE, category: 'Enhancement', description: 'x' } });
+  const forged = await post(`${W}/tickets`, stranger, { requestId: `official-forged-${Date.now()}`, requester: { id: devId }, input: { title: 'x', name: 'Someone Else', type: 'Ticket', department: 'SYS', date: FUTURE, category: 'EXCEL', description: 'x' } });
   assert.equal(forged.status, 201);
   const made = await ticketOf(forged.json.created);
   assert.equal(made.requester.id, await idOf(4));
@@ -622,7 +622,7 @@ test('reminders survive restarts: a later run catches up, with no duplicates', a
 
 test('concurrent saves and duplicate submissions keep one result', async () => {
   const requestId = `official-dup-${Date.now()}`;
-  const body = { requestId, input: { title: 'Duplicate', type: 'Ticket', department: 'IT', date: FUTURE, category: 'Enhancement', description: 'x' } };
+  const body = { requestId, input: { title: 'Duplicate', type: 'Ticket', department: 'SYS', date: FUTURE, category: 'EXCEL', description: 'x' } };
   const all = await Promise.all(Array.from({ length: 6 }, () => post(`${W}/tickets`, req, body)));
   assert.ok(all.every(r => [200, 201].includes(r.status)), JSON.stringify(all.map(r => r.status)));
   assert.equal(new Set(all.map(r => r.json.created)).size, 1);
@@ -659,8 +659,8 @@ test('input validation: unusual values are refused cleanly, never as a server er
   assert.equal((await post(`${W}/tickets`, req, { requestId: { $ne: '' }, input: {} })).status, 400);
   assert.equal((await post(`${W}/tickets/${id}/actions`, req, { version: { $gt: 0 }, action: 'comment', input: { comment: 'x' } })).status, 409);
   assert.equal((await act(req, id, 'comment', { comment: 'x'.repeat(2001) })).status, 400);
-  assert.equal((await post(`${W}/tickets`, req, { requestId: `official-long-${Date.now()}`, input: { title: 'x'.repeat(151), type: 'Ticket', department: 'IT', date: FUTURE, category: 'Enhancement', description: 'x' } })).status, 400);
-  assert.equal((await post(`${W}/tickets`, req, { requestId: `official-date-${Date.now()}`, input: { title: 'x', type: 'Ticket', department: 'IT', date: '2030-02-31', category: 'Enhancement', description: 'x' } })).status, 400);
+  assert.equal((await post(`${W}/tickets`, req, { requestId: `official-long-${Date.now()}`, input: { title: 'x'.repeat(151), type: 'Ticket', department: 'SYS', date: FUTURE, category: 'EXCEL', description: 'x' } })).status, 400);
+  assert.equal((await post(`${W}/tickets`, req, { requestId: `official-date-${Date.now()}`, input: { title: 'x', type: 'Ticket', department: 'SYS', date: '2030-02-31', category: 'EXCEL', description: 'x' } })).status, 400);
   // A task's text is capped, and a plan fits in a request: a full-size project plan in non-Latin text is not too large.
   const big = 'ก'.repeat(1900);
   const plan = await act(dev, p, 'save-task', { index: null, task: { ...task(2, 'Person 2'), requirement: big, criteria: big } });

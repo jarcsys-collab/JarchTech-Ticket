@@ -55,13 +55,21 @@ const confirmations = t => {
 };
 
 function filterBar() {
-  const select = (key, all, label, values) => `<select id="${key}-filter" data-filter="${key}" aria-label="Filter by ${label}"><option value="">${all}</option>${values.map(v => { const [value, text] = Array.isArray(v) ? v : [v, v]; return `<option value="${esc(value)}" ${filters[key] === value ? 'selected' : ''}>${esc(text)}</option>`; }).join('')}</select>`;
+  const option = (key, v) => { const [value, text] = Array.isArray(v) ? v : [v, v]; return `<option value="${esc(value)}" ${filters[key] === value ? 'selected' : ''}>${esc(text)}</option>`; };
+  const select = (key, all, label, values, earlier = []) => `<select id="${key}-filter" data-filter="${key}" aria-label="Filter by ${label}"><option value="">${all}</option>${values.map(v => option(key, v)).join('')}${earlier.length ? `<optgroup label="Earlier values">${earlier.map(v => option(key, v)).join('')}</optgroup>` : ''}</select>`;
+  // Older records keep their original values: these appear only when a record you can see still has one.
+  const earlierValues = (key, current) => {
+    const held = new Set(state.tickets.map(t => t[key]));
+    if (filters[key]) held.add(filters[key]);
+    return ListFilter.CHOICES[key].filter(v => held.has(v) && !current.includes(v));
+  };
   // My workspace filters by assignee account (Admin or Developer); the simulation and local modes by sample name.
   const devValues = accounts ? [ListFilter.UNASSIGNED, ...(server.developers || []).map(d => [d.id, d.name])] : ListFilter.CHOICES.dev;
   return `<input class="search" type="search" data-filter="q" maxlength="${ListFilter.MAX_QUERY}" aria-label="Search by ID, summary, or description" placeholder="Search ${view === 'Projects' ? 'project or ticket ID' : 'ticket ID'}, summary, description…" value="${esc(filters.q)}">`
     + select('status', 'All statuses', 'status', ListFilter.CHOICES.status)
     + select('priority', 'All priorities', 'priority', ListFilter.CHOICES.priority)
-    + select('department', 'All departments', 'department', ListFilter.CHOICES.department)
+    + select('department', 'All departments', 'department', WorkflowCore.DEPARTMENTS, earlierValues('department', WorkflowCore.DEPARTMENTS))
+    + select('category', 'All categories', 'request category', WorkflowCore.CATEGORIES, earlierValues('category', WorkflowCore.CATEGORIES))
     + select('type', 'Tickets and Projects', 'request type', ListFilter.CHOICES.type)
     + select('stage', 'Any stage', 'overview stage', WorkflowCore.STAGES)
     // Only Admins see everyone's work, so only they get an assignee filter.
