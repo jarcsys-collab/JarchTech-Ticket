@@ -12,7 +12,7 @@ guide, not a formal security audit or a guarantee.
 | --- | --- |
 | Service | Railway project `JarcTech-Ticket`, service `JarcTech-Ticket`, environment `production`, one instance |
 | Deploys | Automatically from `main` on GitHub |
-| Start and health check | `npm start`, `/readyz` (60-second window), restart on failure. Set in the Railway service settings and in `railway.json`, which Railway stops reading on 2026-12-01 |
+| Start and health check | `npm start` (Railway's default for this app). Health check `/readyz`, 60-second window, and restart on failure are set in the Railway service settings. `railway.json` repeats them, but Railway stops reading it on 2026-12-01 |
 | Database | MongoDB Atlas, database `jarctech_ticket_staging` |
 | Sign-in | Microsoft Entra ID, the existing app registration; member accounts of the company tenant only |
 
@@ -118,7 +118,7 @@ These need portal access that this work did not have.
 - [ ] **Atlas network access:** the app's Railway service has no fixed outbound address on its current plan, so the list is probably open to all addresses. Confirm, and restrict it if static outbound addresses become available.
 - [ ] **Atlas database user:** the app has `readWrite` on this database only, which is good. Consider rotating the password (it is also in the owner's ignored local `.env.staging`), and update Railway when you do.
 - [ ] **Entra:** note the client secret's expiry date. Sign-in stops working when it expires.
-- [ ] **Railway after 2026-12-01:** [Railway stops reading `railway.json`](https://docs.railway.com/infrastructure-as-code) then. The health check and start command are also in the service settings, so deployment keeps working; delete the file, or move to `.railway/railway.ts` with `railway config migrate` if you want settings in code. Railway checks `/readyz` only during a deployment, not afterwards, so an outage later needs outside monitoring to be noticed.
+- [ ] **Railway after 2026-12-01:** [Railway stops reading `railway.json`](https://docs.railway.com/infrastructure-as-code) then. The health check and restart policy are in the service settings, and `npm start` is the default, so deployment keeps working; delete the file, or move to `.railway/railway.ts` with `railway config migrate` if you want settings in code. Railway checks `/readyz` only during a deployment, not afterwards, so an outage later needs outside monitoring to be noticed.
 - [ ] **GitHub:** `main` has no branch protection. Consider requiring the `check` job, since `main` deploys automatically.
 
 ## Admin onboarding
