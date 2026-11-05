@@ -17,6 +17,7 @@ function guideContexts(t) {
     isRequester: x => Boolean(x.requester && x.requester.id === me),
     isWorker: x => staff && x.devId === me,
     sameParty: x => sameParty(x),
+    selfService: x => selfService(x),
     assignee: id => { const d = signedIn.role === 'Admin' && (server.developers || []).find(x => x.id === String(id)); return d ? { dev: d.name, devId: d.id } : null; },
     owners: ownerChoices(t)
   };
@@ -115,7 +116,7 @@ function tracker(t) {
 function nextStepPanel(t, step) {
   if (!step) {
     const closed = t.status === 'Closed';
-    return `<section class="next-step done" id="next-step" data-guide-view="${esc(role)}" aria-labelledby="ns-title"><p class="ns-eyebrow">Next step</p><h3 id="ns-title" tabindex="-1">${closed ? 'Nothing more to do' : `This request is ${esc(t.status.toLowerCase())}`}</h3><p>${closed ? 'Both confirmations were recorded and an Admin closed the request. The history stays below.' : 'No further workflow steps apply. The history stays below.'}</p></section>`;
+    return `<section class="next-step done" id="next-step" data-guide-view="${esc(role)}" aria-labelledby="ns-title"><p class="ns-eyebrow">Next step</p><h3 id="ns-title" tabindex="-1">${closed ? 'Nothing more to do' : `This request is ${esc(t.status.toLowerCase())}`}</h3><p>${closed ? `${selfService(t) ? 'You confirmed as the worker and as the Requestor, and closed the request as Admin.' : 'Both confirmations were recorded and an Admin closed the request.'} The history stays below.` : 'No further workflow steps apply. The history stays below.'}</p></section>`;
   }
   const ui = STEP_UI[step.key] || {};
   const mine = Boolean(step.mine);
@@ -146,7 +147,7 @@ function nextStepPanel(t, step) {
 function arrange(t, step) {
   const work = $('#work-area'), support = $('#support-area');
   if (!work || !support) return;
-  const keys = step ? valueOf((STEP_UI[step.key] || {}).sections, t) || [] : ['confirmations', 'evidence', 'details'];
+  const keys = step ? valueOf((STEP_UI[step.key] || {}).sections, t) || [] : ['confirmations', 'evidence', 'details', 'records'];
   for (const key of keys) for (const el of document.querySelectorAll(`#support-area [data-section="${key}"]`)) work.append(el);
   if (!work.children.length) { const d = document.querySelector('#support-area [data-section="details"]'); if (d) work.append(d); }
   for (const el of work.querySelectorAll(':scope > [data-section]')) {

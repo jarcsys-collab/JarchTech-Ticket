@@ -97,6 +97,10 @@ The `release.official` audit event is only a marker. Earlier versions ignore it.
 - **Attachments:** PNG, JPEG, GIF, WebP, PDF, TXT, LOG, CSV, DOCX, XLSX, PPTX; 10 MB each; 5 per submission; 20 unsubmitted per person; 200 MB in total. Content is checked against the type; files always download, never open in the app. Unsubmitted uploads are removed after 24 hours by the scheduler.
 - **Reminders:** every 5 minutes, one instance at a time through a database lease. Each run reads current state, so a restart or missed run catches up, and unique keys prevent duplicates.
 
+## Finding interrupted work
+
+A deletion that stopped part-way leaves a request with a `deleting` field: it is hidden from everyone and finished by the next scheduler run (5 minutes). The log says "finished N interrupted deletion(s)". Audit entries are `events` documents of type `request.deleted`, `request.archived`, and `request.restored`.
+
 ## Material remaining risks
 
 1. **No confirmed automatic backup.** See above. A database loss could lose everything since the last manual `db:backup`.
@@ -126,7 +130,8 @@ These need portal access that this work did not have.
 1. Sign in at the official URL with your company Microsoft account.
 2. Ask a colleague to sign in once. They appear under **Users** as a Requestor. Their account does not exist before that.
 3. Give IT staff the **Developer** role under **Users**. Confirm the change; it applies at once.
-4. Make a second **Admin**. Only one Admin cannot review their own self-requested work, and the last active Admin cannot be removed.
+4. Make a second **Admin**. The last active Admin cannot be removed, and a Developer's self-requested work needs an Admin to review it.
 5. New requests appear in **Needs your action**. Review each, set a priority, and assign an active Developer or yourself.
-6. Follow the next step shown on each request. Close it only after both confirmations (Projects also need the handover).
+6. Follow the next step shown on each request. Close it only after both confirmations (Projects also need the handover). On your own self-assigned request, you take each step yourself.
+   Use **Archive** to clear finished requests from the active lists; **Delete permanently** is for records that must not be kept, and only a backup can bring one back.
 7. When someone leaves, turn their access off under **Users**, then reassign their open work. An Admin other than the worker confirms for a disabled Requestor.

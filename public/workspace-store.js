@@ -67,6 +67,7 @@
     api.developers = data.developers || [];
     api.cannotWork = data.cannotWork || [];
     api.disabled = data.disabled || [];
+    api.activeAdmins = data.activeAdmins || [];
   }
   async function load() {
     status = 'loading';
@@ -137,6 +138,7 @@
     developers: [], // My workspace: active Developers (and, for an Admin, themselves): assignees and task owners
     cannotWork: [], // Admins only: accounts that cannot act as the worker any more
     disabled: [], // Admins only: disabled accounts
+    activeAdmins: [], // Admins only: active Admin accounts (one who is both Requestor and worker completes their own request)
     // Switches workspace for this browser and reloads, so each page load works in exactly one workspace.
     switchTo(next) {
       try { localStorage.setItem(WORKSPACE_KEY, next === 'beta' ? 'beta' : 'mine'); } catch {}
@@ -190,6 +192,12 @@
     act({ kind, id, action, input, view: v, version }) {
       return send(`${BASE}/${kind === 'ticket' ? 'tickets' : 'changes'}/${encodeURIComponent(id)}/actions`, { view: v, version, action, input }, conflictRefresh);
     },
+    // My workspace, Admins only (the server checks): archive, restore, and permanent deletion of finished requests.
+    archive: t => send(`${BASE}/tickets/${encodeURIComponent(t.id)}/archive`, { version: t.version }, conflictRefresh),
+    restore: t => send(`${BASE}/tickets/${encodeURIComponent(t.id)}/restore`, { version: t.version }, conflictRefresh),
+    deleteRequest: ({ id, version, confirm }) => send(`${BASE}/tickets/${encodeURIComponent(id)}/delete`, { version, confirm }, conflictRefresh),
+    deletionPreview: id => read(`${BASE}/tickets/${encodeURIComponent(id)}/deletion-preview`),
+    deletions: () => read(`${BASE}/deletions`),
     async create({ kind, ticketId, ticketVersion, input, view: v }) {
       const key = JSON.stringify({ kind, ticketId, input });
       if (!pendingCreate || pendingCreate.key !== key) pendingCreate = { key, requestId: randomId() };

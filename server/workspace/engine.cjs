@@ -13,6 +13,8 @@
 //   The request then records the effect's key in appliedEffects in the same write that applies it, so it happens exactly
 //   once. If the process stops in between, the effect is finished before anything else touches that request, and by the
 //   scheduler otherwise, so a request can never move on (or close) with an approved change half applied.
+// - Archived requests stay out of the dashboard, queues, activity feed, and reminders, and accept no actions until
+//   restored (retention.cjs, My workspace only). A request being deleted is hidden from everyone.
 const WorkflowCore = require('../../public/workflow-core.js');
 const TL = require('../../public/timeline-core.js');
 const ListFilter = require('../../public/list-filter.js');
@@ -21,6 +23,7 @@ const { HttpError, readJson, sendJson } = require('../http.cjs');
 const { missingSchema } = require('../schema.cjs');
 const { AttachmentError, createAttachments } = require('./attachments.cjs');
 const { changeEvents, createNotifications, ticketEvents } = require('./notifications.cjs');
+const { ACTIVE, ARCHIVED, createRetention } = require('./retention.cjs');
 
 const MAX_NOTICES = 40;
 const REQUEST_ID = /^[A-Za-z0-9_-]{8,80}$/;
@@ -40,13 +43,14 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   const TICKET_PATH = new RegExp(`^${base}\\/tickets\\/(JRC-\\d{1,9})$`);
   const FILE_PATH = new RegExp(`^${base}\\/attachments\\/([0-9a-f]{24})$`);
   const DOWNLOAD_PATH = new RegExp(`^${base}\\/attachments\\/([0-9a-f]{24})\\/download$`);
+  const RETENTION_PATH = new RegExp(`^${base}\\/tickets\\/(JRC-\\d{1,9})\\/(archive|restore|delete|deletion-preview)$`);
   const stamp = stampIn(settings.timezone);
   const tickets = db.collection(names.tickets);
   const changes = db.collection(names.changes);
   const files = createAttachments({
     db, workspace: WORKSPACE, log, now, quotaBytes: attachmentQuotaBytes,
-    names: { attachments: names.attachments, bucket: names.bucket, tickets: names.tickets },
-    canSeeTicket: async (actor, id) => { const t = id && await tickets.findOne({ workspace: WORKSPACE, id }); return Boolean(t && await policy.canSee(actor, t, null, 'download')); }
+    names: { attachments: names.attachments, bucket: names.bucket, tickets: names.tickets, changes: names.changes },
+    canSeeTicket: async (actor, id) => { const t = id && await tickets.findOne({ workspace: WORKSPACE, id }); return Boolean(t && !t.deleting && await policy.canSee(actor, t, null, 'download')); }
   });
   // Simulated inboxes follow the simulated view; real accounts see a notification's text only while they may see its ticket.
   const readable = policy.simulated ? null : async (user, docs) => {
@@ -54,9 +58,10 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     return new Set((await tickets.find({ workspace: WORKSPACE, id: { $in: ids }, ...await policy.visible(user) }, { projection: { id: 1 } }).toArray()).map(t => t.id));
   };
   const notify = createNotifications({ db, workspace: WORKSPACE, collection: names.notifications, addressing: policy.addressing, log, stamp, readable });
-  const toClient = ({ _id, workspace, requestId, pendingEffect, appliedEffects, ...rest }) => rest;
-  const faults = { beforeEffect: null }; // tests only: simulates the process stopping between the two saves
-  const entry = (text, actor, view, at, attachments) => ({ text, time: stamp(at), at, actor: actor.displayName || actor.email, actorId: String(actor._id), view, ...(attachments ? { attachments } : {}) });
+  const toClient = ({ _id, workspace, requestId, pendingEffect, appliedEffects, deleting, ...rest }) => rest;
+  const faults = { beforeEffect: null, beforeDeleteLinked: null, beforeDeleteRequest: null }; // tests only: simulate the process stopping between saves
+  // view: the role the actor acted from. capacity: what they acted as (a self-assigned Admin works as the Worker).
+  const entry = (text, actor, view, at, attachments, capacity) => ({ text, time: stamp(at), at, actor: actor.displayName || actor.email, actorId: String(actor._id), view, ...(capacity ? { capacity } : {}), ...(attachments ? { attachments } : {}) });
   const withFiles = (text, claimed) => claimed ? `${text} (${claimed.list.length} attachment${claimed.list.length === 1 ? '' : 's'})` : text;
   const notFound = () => new HttpError(404, 'not-found');
 
@@ -64,9 +69,10 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   // (beta only; My workspace access comes from the account).
   async function visibleTicket(user, id, view) {
     const t = await tickets.findOne({ workspace: WORKSPACE, id });
-    if (!t || !await policy.canSee(user, t, view)) throw notFound();
+    if (!t || t.deleting || !await policy.canSee(user, t, view)) throw notFound();
     return t;
   }
+  const notArchived = t => { if (t.archived) throw new WorkflowCore.WorkflowError('state', `${t.id} is archived. An Admin can restore it to make changes.`); };
   // Runs fn(ctx) for each capacity the member has on this ticket until one is allowed. Each try works on fresh copies,
   // so a refused capacity changes nothing. Reports the most useful refusal if none is allowed.
   function tryAs(contexts, fn) {
@@ -82,7 +88,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   }
 
   async function notices(filter) {
-    const ts = await tickets.find({ workspace: WORKSPACE, ...filter }, { projection: { id: 1, history: 1 } }).toArray();
+    const ts = await tickets.find({ workspace: WORKSPACE, ...filter, ...ACTIVE }, { projection: { id: 1, history: 1 } }).toArray();
     const cs = await changes.find({ workspace: WORKSPACE, ticket: { $in: ts.map(t => t.id) } }, { projection: { id: 1, history: 1 } }).toArray();
     return [...ts, ...cs]
       .flatMap(d => d.history.map((h, i) => ({ text: `${d.id} · ${h.text}`, time: h.time, at: h.at ? new Date(h.at).getTime() : 0, i })))
@@ -93,13 +99,14 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   // Everything this member may see, for the dashboard and details. (Lists are searched page by page.)
   async function workspace(user, view) {
     const filter = await policy.visible(user, view);
-    const ts = await tickets.find({ workspace: WORKSPACE, ...filter }).sort({ createdAt: -1, id: -1 }).toArray();
+    const ts = await tickets.find({ workspace: WORKSPACE, ...filter, ...ACTIVE }).sort({ createdAt: -1, id: -1 }).toArray();
     const cs = await changes.find({ workspace: WORKSPACE, ticket: { $in: ts.map(t => t.id) } }).sort({ createdAt: -1, id: -1 }).toArray();
     return { tickets: ts.map(toClient), changes: cs.map(toClient), notices: await notices(filter), ...(policy.extras ? await policy.extras(user) : {}) };
   }
   async function nextId(collection, prefix, floor) {
     const docs = await collection.find({ workspace: WORKSPACE }, { projection: { id: 1 } }).toArray();
-    return `${prefix}-${Math.max(floor, ...docs.map(d => Number(d.id.split('-')[1]) || 0)) + 1}`;
+    const retired = retention ? await retention.retiredNumbers(prefix) : [];
+    return `${prefix}-${Math.max(floor, ...retired, ...docs.map(d => Number(d.id.split('-')[1]) || 0)) + 1}`;
   }
   // Inserts with a fresh sequential id; a repeated requestId returns the record created by the first submission.
   // Simultaneous submissions can pick the same number; each retry waits a short random moment so they spread out.
@@ -213,6 +220,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   async function ticketAction(actor, id, body) {
     await settle(id);
     const current = await visibleTicket(actor, id, body.view);
+    notArchived(current);
     if (body.version !== current.version) throw await conflict('tickets', id);
     const at = now();
     const input = { ...(body.input || {}) };
@@ -233,7 +241,8 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
       ({ ctx, next } = tryAs(contexts, c => {
         const copy = clone(current);
         const notes = WorkflowCore.ticketAction(copy, body.action, input, c);
-        copy.history.push(...notes.map(n => entry(n, actor, c.view, at, claimed ? claimed.list : null)));
+        const capacity = WorkflowCore.capacityOf(current, body.action, input, c);
+        copy.history.push(...notes.map(n => entry(n, actor, c.view, at, claimed ? claimed.list : null, capacity)));
         return { next: copy };
       }));
       if (!await replaceIfCurrent(tickets, current, next, at)) throw await conflict('tickets', id);
@@ -248,6 +257,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     if (!REQUEST_ID.test(String(body.requestId || ''))) throw new HttpError(400, 'invalid-request-id');
     await settle(ticketId);
     const ticket = await visibleTicket(actor, ticketId, body.view);
+    notArchived(ticket);
     const prior = await changes.findOne({ workspace: WORKSPACE, requestId: body.requestId });
     if (prior) {
       if (prior.ticket !== ticketId) throw new HttpError(409, 'request-id-in-use');
@@ -280,13 +290,15 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     await visibleTicket(actor, current.ticket, body.view); // says nothing about records this member may not see
     await settle(current.ticket);
     const ticket = await visibleTicket(actor, current.ticket, body.view);
+    notArchived(ticket);
     if (body.version !== current.version) throw await conflict('changes', id);
     const at = now();
     const contexts = await policy.contexts(actor, ticket, body);
     const { ctx, next, result } = tryAs(contexts, c => {
       const copy = clone(current);
       const r = WorkflowCore.changeAction(copy, clone(ticket), body.action, body.input || {}, c);
-      copy.history.push(...r.notes.map(n => entry(n, actor, c.view, at)));
+      const capacity = WorkflowCore.capacityOf(ticket, body.action, body.input, c);
+      copy.history.push(...r.notes.map(n => entry(n, actor, c.view, at, null, capacity)));
       return { next: copy, result: r };
     });
     // Approval and release also update the original request: the intent is saved with the change, then carried out.
@@ -317,7 +329,10 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     try { query = ListFilter.normalize(params, { accounts: !policy.simulated }); }
     catch (err) { if (err instanceof ListFilter.FilterError) throw new WorkflowCore.WorkflowError('invalid', err.message); throw err; }
     const { filters: f, scope, page, pageSize } = query;
-    const and = [{ workspace: WORKSPACE }, await policy.visible(actor, params.get('view'))];
+    // Active records, or (Admins only) the Archived view.
+    const archivedOnly = params.get('archived') === '1';
+    if (archivedOnly && !(retention && policy.retention.canManage(actor))) throw new WorkflowCore.WorkflowError('forbidden', 'Only an Admin can see archived requests.');
+    const and = [{ workspace: WORKSPACE }, await policy.visible(actor, params.get('view')), archivedOnly ? ARCHIVED : ACTIVE];
     if (scope === 'projects') and.push({ project: { $type: 'string' } });
     if (f.q) {
       const rx = { $regex: ListFilter.escapeRegex(f.q), $options: 'i' };
@@ -376,6 +391,11 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     return { tickets: [toClient(t)], changes: (await changes.find({ workspace: WORKSPACE, ticket: id }).toArray()).map(toClient) };
   }
 
+  const retention = policy.retention ? createRetention({
+    db, workspace: WORKSPACE, tickets, changes, notifications: names.notifications, outbox: policy.retention.outbox, files, canManage: policy.retention.canManage, recordEvent, log, now,
+    helpers: { visibleTicket, settle, replaceIfCurrent, conflict, clone, entry, toClient, stamp, faults }
+  }) : null;
+
   // Routes under the policy's base path. The caller (signed-in API) has already checked the session and the request
   // origin. The schema check is read-only and cached once it passes (db:setup only ever adds collections and indexes).
   let schemaReady = false;
@@ -391,10 +411,13 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     try {
       let result;
       const ticketMatch = TICKET_PATH.exec(pathname), fileMatch = FILE_PATH.exec(pathname), downloadMatch = DOWNLOAD_PATH.exec(pathname);
+      const retentionMatch = retention ? RETENTION_PATH.exec(pathname) : null;
       const view = url.searchParams.get('view');
       if (at('/workspace') && get) { files.sweepSoon(); return sendJson(req, res, 200, await workspace(user, view)); }
       if (at('/search') && get) return sendJson(req, res, 200, await search(user, url.searchParams));
       if (ticketMatch && get) return sendJson(req, res, 200, await getTicket(user, ticketMatch[1], view));
+      if (retentionMatch && retentionMatch[2] === 'deletion-preview' && get) return sendJson(req, res, 200, await retention.preview(user, retentionMatch[1]));
+      if (retention && at('/deletions') && get) return sendJson(req, res, 200, await retention.deletions(user));
       if (at('/notifications') && get) return sendJson(req, res, 200, await notify.list(user, url.searchParams));
       if (at('/notifications/unread') && get) return sendJson(req, res, 200, { unread: await notify.unread(user, url.searchParams.get('view')) });
       if (downloadMatch && get) return await files.download(req, res, user, downloadMatch[1]);
@@ -409,6 +432,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
       const action = ACTION_PATH.exec(pathname), changeCreate = CHANGE_CREATE_PATH.exec(pathname);
       if (at('/tickets')) result = await createTicket(user, body);
       else if (changeCreate) result = await createChange(user, changeCreate[1], body);
+      else if (retentionMatch && retentionMatch[2] !== 'deletion-preview') result = await retention[{ archive: 'archive', restore: 'restore', delete: 'remove' }[retentionMatch[2]]](user, retentionMatch[1], body);
       else if (action && action[1] === 'tickets' && action[2].startsWith('JRC-')) result = await ticketAction(user, action[2], body);
       else if (action && action[1] === 'changes' && action[2].startsWith('CR-')) result = await changeAction(user, action[2], body);
       else if (at('/reset') && policy.reset) result = await reset(user, body);
@@ -434,14 +458,16 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
   // For the reminder scheduler: active records, and delivery of reminder notifications.
   const scan = async () => {
     // Released work is included: it still awaits the Admin's closure.
-    const ts = await tickets.find({ workspace: WORKSPACE, status: { $nin: ['Closed', 'Rejected', 'Cancelled'] } }).toArray();
+    const ts = await tickets.find({ workspace: WORKSPACE, status: { $nin: ['Closed', 'Rejected', 'Cancelled'] }, ...ACTIVE }).toArray();
     const cs = await changes.find({ workspace: WORKSPACE, ticket: { $in: ts.map(t => t.id) }, status: { $in: ['Submitted', 'Awaiting approval', 'Awaiting acceptance'] } }).toArray();
     return ts.map(t => ({ ticket: t, changes: cs.filter(c => c.ticket === t.id) }));
   };
 
   const usage = () => files.usage();
+  // Scheduler: finishes whatever a restart interrupted.
+  const recover = async () => { if (retention) await retention.recover(); return recoverEffects(); };
 
-  return { handle, workspace, files, notify, scan, policy, usage, recoverEffects, faults, seed: options => policy.reset && policy.reset.seed(db, { now, ...options }) };
+  return { handle, workspace, files, notify, scan, policy, usage, recoverEffects, recover, faults, seed: options => policy.reset && policy.reset.seed(db, { now, ...options }) };
 }
 
 module.exports = { Conflict, createWorkspace };

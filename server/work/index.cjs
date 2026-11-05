@@ -3,7 +3,8 @@
 // account, read from the database on every request (so role and status changes apply at once):
 //   Requestor  their own requests (requester.id is always the signed-in account; the browser cannot choose it)
 //   Developer  work assigned to them (devId) and their own requests; they plan and deliver their assigned work
-//   Admin      every request: review, assign (to an active Developer or themselves), decide, approve, and close
+//   Admin      every request: review, assign (to an active Developer or themselves), decide, approve, close, and archive
+//              or delete finished requests. Archived requests are visible to Admins only until restored.
 // The assigned worker (devId) is a Developer, or an Admin who assigned the work to themselves; they receive the
 // delivery reminders. A member acts in each capacity they hold on a ticket: their role, and Requestor as its owner.
 // Beta simulation views and sample people never apply here. The request handling is server/workspace/engine.cjs.
@@ -26,7 +27,8 @@ function createWork({ db, log = console, now = () => new Date(), recordEvent = a
   const owns = (user, t) => Boolean(t.requester && t.requester.id === uidOf(user));
   // Assignment counts only while the account is a Developer or Admin: someone who becomes a Requestor loses it at once.
   const assigned = (user, t) => ['Admin', 'Developer'].includes(user.role) && Boolean(t.devId && t.devId === uidOf(user));
-  const visibility = user => (admin(user) ? {} : user.role === 'Developer' ? { $or: [{ devId: uidOf(user) }, { 'requester.id': uidOf(user) }] } : { 'requester.id': uidOf(user) });
+  const notArchived = { archived: { $exists: false } }; // archived requests are the Admins' until restored
+  const visibility = user => (admin(user) ? {} : user.role === 'Developer' ? { $or: [{ devId: uidOf(user) }, { 'requester.id': uidOf(user) }], ...notArchived } : { 'requester.id': uidOf(user), ...notArchived });
   // Admins assign to active Developers or to themselves; Developers see the same list for task owners only.
   async function assignees(user) {
     if (admin(user)) return [...await activeDevelopers(), { id: uidOf(user), name: nameOf(user), role: 'Admin', self: true }];
@@ -37,13 +39,22 @@ function createWork({ db, log = console, now = () => new Date(), recordEvent = a
   async function accountFlags(user) {
     if (!admin(user)) return {};
     const flagged = await users.find({ $or: [{ status: { $ne: 'active' } }, { role: 'Requestor' }] }, { projection: { status: 1 } }).toArray();
-    return { cannotWork: flagged.map(u => String(u._id)), disabled: flagged.filter(u => u.status !== 'active').map(u => String(u._id)) };
+    const admins = await users.find({ role: 'Admin', status: 'active' }, { projection: { _id: 1 } }).toArray();
+    return { cannotWork: flagged.map(u => String(u._id)), disabled: flagged.filter(u => u.status !== 'active').map(u => String(u._id)), activeAdmins: admins.map(u => String(u._id)) };
   }
   // The Requestor's account is disabled: nobody can confirm for them, so an Admin other than the worker reviews instead.
   async function requesterGone(ticket) {
     if (!ticket.requester || !/^[0-9a-f]{24}$/.test(String(ticket.requester.id))) return false;
     const owner = await users.findOne({ _id: new ObjectId(ticket.requester.id) }, { projection: { status: 1 } });
     return !owner || owner.status !== 'active';
+  }
+
+  // The Requestor and the worker are one account, and it is an active Admin: they complete the request themselves. Read
+  // fresh on every action, so if that account stops being an active Admin, the independent review applies again.
+  const sameAccount = t => Boolean(t.devId && t.requester && t.requester.id === t.devId);
+  async function selfServedByAdmin(ticket) {
+    if (!sameAccount(ticket) || !/^[0-9a-f]{24}$/.test(ticket.devId)) return false;
+    return Boolean(await users.findOne({ _id: new ObjectId(ticket.devId), role: 'Admin', status: 'active' }, { projection: { _id: 1 } }));
   }
 
   const policy = {
@@ -58,10 +69,12 @@ function createWork({ db, log = console, now = () => new Date(), recordEvent = a
     notSetUp: { error: 'workspace-not-set-up', message: 'My workspace has not been set up yet. Ask the owner to run the database setup.' },
     addressing: accounts,
     visible: async user => visibility(user),
-    canSee: async (user, t) => admin(user) || assigned(user, t) || owns(user, t),
+    canSee: async (user, t) => admin(user) || (!t.archived && (assigned(user, t) || owns(user, t))),
+    retention: { canManage: admin, outbox: 'email_outbox' },
     async contexts(user, ticket) {
       const people = await assignees(user);
       const gone = admin(user) && await requesterGone(ticket);
+      const selfServed = await selfServedByAdmin(ticket);
       // The current worker stays selectable while eligible (another Admin who assigned it to themselves, for example),
       // so an Admin can change the priority without reassigning the work.
       const keeps = admin(user) && ticket.devId && /^[0-9a-f]{24}$/.test(ticket.devId) && await users.findOne({ _id: new ObjectId(ticket.devId), status: 'active', role: { $in: ['Admin', 'Developer'] } }, { projection: { _id: 1 } });
@@ -69,8 +82,11 @@ function createWork({ db, log = console, now = () => new Date(), recordEvent = a
         actorFor: () => ({ id: uidOf(user), name: nameOf(user) }),
         isRequester: t => owns(user, t),
         isWorker: t => assigned(user, t),
-        // The Requestor and the worker are the same account: an Admin must review for the Requestor side.
-        sameParty: t => gone || Boolean(t.devId && t.requester && t.requester.id === t.devId),
+        // The Requestor and the worker are the same account: an Admin must review for the Requestor side, unless that
+        // account is itself an active Admin.
+        sameParty: t => gone || (sameAccount(t) && !selfServed),
+        // This Admin is both, so they take each side themselves, as separate actions.
+        selfService: t => selfServed && admin(user) && owns(user, t) && assigned(user, t),
         assignee: id => {
           if (keeps && String(id) === ticket.devId) return { dev: ticket.dev, devId: ticket.devId };
           const d = admin(user) && people.find(x => x.id === String(id));

@@ -98,6 +98,28 @@ test('My workspace capacities: when the Requestor is the worker, only a differen
   assert.equal(t.completion.requestor.id, 'adm2');
 });
 
+test('an Admin who is both Requestor and worker is guided through each step themselves, never to another reviewer', () => {
+  const uid = 'adm1';
+  const acc = view => ({ view, time: () => 'now', actorFor: () => ({ id: uid, name: 'Ana' }), isRequester: t => t.requester.id === uid, isWorker: t => view === 'Admin' && t.devId === uid, sameParty: () => false, selfService: t => t.devId === uid && t.requester.id === uid, owners: ['Ana'], assignee: () => ({ dev: 'Ana', devId: uid }) });
+  const contexts = [acc('Admin'), acc('Requestor')];
+  const inputs = { start: { status: 'In progress' }, 'add-evidence': { links: [{ url: 'https://x.example/' }] }, 'worker-complete': { summary: 'Done' }, 'requestor-confirm': {}, close: { status: 'Closed' } };
+  const t = { id: 'JRC-2100', type: 'Ticket', status: 'Assigned', priority: 'Low', dev: 'Ana', devId: uid, requester: { id: uid, name: 'Ana' }, tasks: [], history: [], evidence: [], completion: { round: 1, worker: null, requestor: null, log: [] } };
+  const path = [];
+  for (let s = W.nextStep(t, contexts); s; s = W.nextStep(t, contexts)) {
+    assert.ok(s.mine, `${s.key} is theirs`);
+    assert.equal(s.self, true); assert.equal(s.independent, false);
+    assert.doesNotMatch(`${s.title} ${s.explain}`, /another|different|other Admin|independent/i, s.key);
+    path.push(`${s.key}:${s.mine}`);
+    W.ticketAction(t, s.action, inputs[s.key], s.mine === 'Admin' ? contexts[0] : contexts[1]);
+  }
+  assert.deepEqual(path, ['start:Admin', 'add-evidence:Admin', 'worker-complete:Admin', 'requestor-confirm:Requestor', 'close:Admin']);
+  assert.equal(t.status, 'Closed');
+  // Someone else sees whose turn it was, with no request for a second review.
+  const open = { ...t, status: 'Awaiting acceptance', completion: { round: 1, worker: { id: uid }, requestor: null, log: [] } };
+  const other = W.nextStep(open, [{ ...acc('Admin'), actorFor: () => ({ id: 'adm2', name: 'Bo' }), isWorker: () => false, isRequester: () => false, selfService: () => false }]);
+  assert.deepEqual([other.key, other.mine, other.independent, other.self], ['requestor-confirm', null, false, false]);
+});
+
 test('scope changes are guided through review, assessment, agreement, approval, and delivery', () => {
   const t = fresh('Project');
   follow(t, VIEWS, { until: 'tasks' }); // a Project in development
