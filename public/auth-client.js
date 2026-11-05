@@ -12,7 +12,7 @@
     'invalid-email': 'Enter a valid work email address.', 'invalid-role': 'Choose a role.', 'already-exists': 'That email address already has an account or invitation.',
     'cannot-change-self': 'You cannot change your own role or access.', 'last-admin': 'At least one active Admin must remain.', 'changed-meanwhile': 'This person was changed by someone else meanwhile. Review and try again.',
     'invitation-not-accepted': 'This person has not signed in yet, so their invitation is still pending.', 'admin-only': 'Only Admins can manage users and roles.',
-    'cross-origin': 'The request was blocked because it did not come from JarcTech Ticket.', 'email-disabled': 'Email delivery is not turned on.', 'not-retryable': 'This message is no longer waiting for a retry. Refresh to see its status.', 'test-too-soon': 'A test message was just queued. Wait a minute before asking for another.', 'not-test-recipient': 'Your account is not on the test recipient list, so no test message was sent.', 'email-preference-off': 'Email is turned off in your Settings, so no test message was sent.', 'rate-limited': 'Too many changes in a short time. Wait a moment and try again.'
+    'cross-origin': 'The request was blocked because it did not come from JarcTech Ticket.', 'email-disabled': 'Email delivery is not turned on.', 'in-doubt': 'This message may already have gone out, so retrying could send it twice.', 'not-retryable': 'This message is no longer waiting for a retry. Refresh to see its status.', 'test-too-soon': 'A test message was just queued. Wait a minute before asking for another.', 'not-test-recipient': 'Your account is not on the test recipient list, so no test message was sent.', 'email-preference-off': 'Email is turned off in your Settings, so no test message was sent.', 'rate-limited': 'Too many changes in a short time. Wait a moment and try again.'
   };
 
   const inspection = window.JARC_INSPECTION || null; // present only when the server enables INSPECTION_MODE
@@ -222,7 +222,7 @@
   const timeOf = at => new Date(at).toLocaleString('en-PH', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
   // Email delivery for Admins: what is queued, accepted by the provider, failed, or suppressed, with a retry for failures.
-  const EMAIL_REASONS = { 'account-unavailable': 'account disabled or unavailable', 'preference-off': 'turned off in their settings', 'not-test-recipient': 'not a test recipient', 'record-unavailable': 'request deleted', archived: 'request archived', 'no-access': 'no longer has access', 'no-longer-involved': 'no longer involved', 'no-longer-needed': 'step already done or changed', superseded: 'replaced by a newer message', expired: 'waited too long' };
+  const EMAIL_REASONS = { 'account-unavailable': 'account disabled or unavailable', 'preference-off': 'turned off in their settings', 'not-test-recipient': 'not a test recipient', 'outside-company': 'address is outside the company', 'record-unavailable': 'request deleted', archived: 'request archived', 'no-access': 'no longer has access', 'no-longer-involved': 'no longer involved', 'no-longer-needed': 'step already done or changed', superseded: 'replaced by a newer message', expired: 'waited too long' };
   const EMAIL_STATE = { enabled: 'On for everyone involved.', 'test-only': 'On for the test recipients only.', disabled: 'Off. Notifications are in-app only, and nothing is queued.' };
   async function loadEmailDelivery() {
     const host = document.querySelector('#email-delivery-body');
@@ -231,16 +231,16 @@
     try { data = await api('GET', '/api/v1/work/email'); }
     catch (err) { host.innerHTML = `<p class="read-only">${esc(message(err))}</p>`; return; }
     const c = data.counts;
-    const rows = data.items.map(i => `<tr><td>${esc(i.record || 'Test')}<span class="ticket-id">${esc(i.event)}</span></td><td>${esc(i.recipient)}</td><td>${esc(i.status === 'sent' ? 'Accepted by provider' : i.status[0].toUpperCase() + i.status.slice(1))}${i.reason ? `<span class="ticket-id">${esc(EMAIL_REASONS[i.reason] || i.reason)}</span>` : ''}${i.error ? `<span class="ticket-id">${esc(i.error)}</span>` : ''}</td><td>${esc(timeOf(i.sentAt || i.at))}${i.canRetry ? ` <button class="secondary" data-email-retry="${esc(i.id)}">Retry</button>` : ''}</td></tr>`).join('');
-    host.innerHTML = `<p><b>${esc(EMAIL_STATE[data.delivery] || '')}</b> Queued ${c.queued} · Accepted ${c.sent} · Failed ${c.failed} · Suppressed ${c.suppressed}</p>
-      <p class="read-only">"Accepted by provider" means Resend took the message. It does not prove it reached the inbox. In-app notifications are not affected by any of this.</p>
+    const rows = data.items.map(i => `<tr><td>${esc(i.record || 'Test')}<span class="ticket-id">${esc(i.event)}</span></td><td>${esc(i.recipient)}</td><td>${esc(i.status === 'sent' ? data.sentLabel : i.status[0].toUpperCase() + i.status.slice(1))}${i.reason ? `<span class="ticket-id">${esc(EMAIL_REASONS[i.reason] || i.reason)}</span>` : ''}${i.error ? `<span class="ticket-id">${esc(i.error)}</span>` : ''}</td><td>${esc(timeOf(i.sentAt || i.at))}${i.canRetry ? ` <button class="secondary" data-email-retry="${esc(i.id)}"${i.inDoubt ? ' data-email-force="1"' : ''}>${i.inDoubt ? 'Send again (may duplicate)' : 'Retry'}</button>` : ''}</td></tr>`).join('');
+    host.innerHTML = `<p><b>${esc(EMAIL_STATE[data.delivery] || '')}</b> Queued ${c.queued} · Sent ${c.sent} · Failed ${c.failed} · Suppressed ${c.suppressed}</p>
+      <p class="read-only">"${esc(data.sentLabel)}" means the mail service took the message. It does not prove it reached the inbox. In-app notifications are not affected by any of this.</p>
       ${data.delivery === 'disabled' ? '' : '<div class="actions"><button class="secondary" id="email-test">Send a test email to myself</button><button class="secondary" id="email-refresh">Refresh</button></div>'}
       ${rows ? `<div class="table-wrap"><table class="users-table"><thead><tr><th>Request</th><th>To</th><th>Status</th><th>When</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="read-only">No email has been queued.</p>'}`;
     const again = host.querySelector('#email-refresh');
     if (again) again.onclick = loadEmailDelivery;
     const test = host.querySelector('#email-test');
     if (test) test.onclick = async () => { test.disabled = true; try { await api('POST', '/api/v1/work/email/test', {}); toast('Test email queued'); } catch (err) { toast(message(err)); } loadEmailDelivery(); };
-    host.querySelectorAll('[data-email-retry]').forEach(b => b.onclick = async () => { b.disabled = true; try { await api('POST', `/api/v1/work/email/${b.dataset.emailRetry}/retry`, {}); toast('Queued again'); } catch (err) { toast(message(err)); } loadEmailDelivery(); });
+    host.querySelectorAll('[data-email-retry]').forEach(b => b.onclick = async () => { b.disabled = true; try { await api('POST', `/api/v1/work/email/${b.dataset.emailRetry}/retry`, b.dataset.emailForce ? { force: true } : {}); toast('Queued again'); } catch (err) { toast(message(err)); } loadEmailDelivery(); });
   }
 
   async function openUsers() {

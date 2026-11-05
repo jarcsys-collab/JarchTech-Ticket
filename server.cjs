@@ -37,7 +37,8 @@ async function start(config, { log = console, oidc, now, scheduler = true, email
   if (reminders && config.reminders.enabled && scheduler) reminders.start();
   if (auth) {
     log.log(config.reminders.enabled ? `Reminders: on (every ${config.reminders.intervalMinutes} min, ${config.reminders.timezone}).` : 'Reminders: off (REMINDERS=disabled).');
-    log.log({ enabled: 'Email: enabled via Resend. Actions email the people involved; reminders only those who opted in.', 'test-only': 'Email: enabled via Resend for the test recipients only (EMAIL_TEST_RECIPIENTS).', disabled: 'Email: disabled. Notifications are in-app only.' }[email.mode]);
+    const via = { resend: 'Resend', 'power-automate': 'Power Automate' }[config.email.provider];
+    log.log({ enabled: `Email: enabled via ${via}. Actions email the people involved; reminders only those who opted in.`, 'test-only': `Email: enabled via ${via} for the test recipients only (EMAIL_TEST_RECIPIENTS).`, disabled: 'Email: disabled. Notifications are in-app only.' }[email.mode]);
   }
   log.log(!auth
     ? 'Sign-in: none. Browser-only demo mode for local use; records stay in this browser.'
