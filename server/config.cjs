@@ -33,7 +33,8 @@ const REMINDER_SETTINGS = {
   REMINDER_INTERVAL_MINUTES: ['intervalMinutes', 5, 1, 1440]
 };
 // Optional email delivery. Off unless EMAIL_DELIVERY names a provider and its settings are complete.
-const EMAIL_PROVIDERS = ['disabled', 'resend'];
+const EMAIL_PROVIDERS = ['disabled', 'resend', 'power-automate'];
+const FLOW_HOST = /(^|\.)(logic\.azure\.com|powerplatform\.com|powerautomate\.com)$/i;
 const EMAIL_ADDRESS = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
 
 class ConfigError extends Error {
@@ -117,9 +118,10 @@ function loadReminders(env, problems) {
 function loadEmail(env, problems) {
   const value = name => (env[name] || '').trim();
   const provider = value('EMAIL_DELIVERY') || 'disabled';
-  if (!EMAIL_PROVIDERS.includes(provider)) { problems.push('EMAIL_DELIVERY must be disabled or resend.'); return { enabled: false, provider: 'disabled' }; }
+  if (!EMAIL_PROVIDERS.includes(provider)) { problems.push('EMAIL_DELIVERY must be disabled, resend, or power-automate.'); return { enabled: false, provider: 'disabled' }; }
   if (provider === 'disabled') return { enabled: false, provider };
   const before = problems.length;
+  if (provider === 'power-automate') return loadPowerAutomate(value, problems, before);
   const from = value('EMAIL_FROM'), key = value('RESEND_API_KEY');
   const address = (/<([^<>]+)>\s*$/.exec(from) || [null, from])[1];
   if (!from) problems.push('EMAIL_FROM is required when EMAIL_DELIVERY=resend (for example "JarcTech Ticket <tickets@your-domain>").');
@@ -134,6 +136,33 @@ function loadEmail(env, problems) {
   if (testRecipients.some(a => !EMAIL_ADDRESS.test(a))) problems.push('EMAIL_TEST_RECIPIENTS must be email addresses separated by commas.');
   if (problems.length > before) return { enabled: false, provider };
   return { enabled: true, provider, from: `JarcTech Ticket <${address}>`, apiKey: key, appUrl: value('APP_BASE_URL').replace(/\/$/, ''), replyTo: replyTo || null, testRecipients };
+}
+
+// EMAIL_DELIVERY=power-automate calls one flow as a service principal. The sender is fixed inside the flow, so there is no
+// EMAIL_FROM. The flow address and the secret are never logged. EMAIL_ALLOWED_DOMAINS keeps recipients inside the company,
+// and the flow checks the same thing itself.
+function loadPowerAutomate(value, problems, before) {
+  const flowUrl = value('EMAIL_FLOW_URL');
+  let url = null;
+  try { url = new URL(flowUrl); } catch {}
+  if (!flowUrl) problems.push('EMAIL_FLOW_URL is required when EMAIL_DELIVERY=power-automate.');
+  else if (!url || url.protocol !== 'https:' || !FLOW_HOST.test(url.hostname)) problems.push('EMAIL_FLOW_URL must be the https address of a Power Automate flow trigger.');
+  const tenantId = value('ENTRA_TENANT_ID').toLowerCase();
+  if (!GUID.test(tenantId)) problems.push('ENTRA_TENANT_ID is required when EMAIL_DELIVERY=power-automate.');
+  const clientId = value('EMAIL_FLOW_CLIENT_ID').toLowerCase(), clientSecret = value('EMAIL_FLOW_CLIENT_SECRET');
+  if (!GUID.test(clientId)) problems.push('EMAIL_FLOW_CLIENT_ID must be the application (client) ID, a GUID, of the app registration the flow allows.');
+  if (!clientSecret) problems.push('EMAIL_FLOW_CLIENT_SECRET is required when EMAIL_DELIVERY=power-automate.');
+  else if (PLACEHOLDER.test(clientSecret)) problems.push('EMAIL_FLOW_CLIENT_SECRET still contains a placeholder.');
+  else if (clientSecret === value('ENTRA_CLIENT_SECRET')) problems.push('EMAIL_FLOW_CLIENT_SECRET must not be the sign-in secret. Use the separate app registration for email.');
+  const allowedDomains = value('EMAIL_ALLOWED_DOMAINS').split(',').map(d => d.trim().toLowerCase()).filter(Boolean);
+  if (!allowedDomains.length || allowedDomains.some(d => !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(d))) problems.push('EMAIL_ALLOWED_DOMAINS must list the company email domains, separated by commas.');
+  const replyTo = value('EMAIL_REPLY_TO');
+  if (replyTo && !EMAIL_ADDRESS.test(replyTo)) problems.push('EMAIL_REPLY_TO must be a plain email address.');
+  const testRecipients = value('EMAIL_TEST_RECIPIENTS').split(',').map(a => a.trim().toLowerCase()).filter(Boolean);
+  if (testRecipients.some(a => !EMAIL_ADDRESS.test(a))) problems.push('EMAIL_TEST_RECIPIENTS must be email addresses separated by commas.');
+  if (!value('APP_BASE_URL')) problems.push('APP_BASE_URL is required when EMAIL_DELIVERY is enabled, for the sign-in link in emails.');
+  if (problems.length > before) return { enabled: false, provider: 'power-automate' };
+  return { enabled: true, provider: 'power-automate', flowUrl, tenantId, clientId, clientSecret, allowedDomains, appUrl: value('APP_BASE_URL').replace(/\/$/, ''), replyTo: replyTo || null, testRecipients };
 }
 
 function readDatabase(env, { required, problems }) {

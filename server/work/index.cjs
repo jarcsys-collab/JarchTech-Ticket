@@ -10,7 +10,7 @@
 // Beta simulation views and sample people never apply here. The request handling is server/workspace/engine.cjs.
 const { ObjectId } = require('mongodb');
 const { WORK_COLLECTIONS } = require('../schema.cjs');
-const { HttpError, sendJson } = require('../http.cjs');
+const { HttpError, readJson, sendJson } = require('../http.cjs');
 const { createWorkspace } = require('../workspace/engine.cjs');
 const { accounts } = require('../workspace/notifications.cjs');
 
@@ -113,7 +113,8 @@ function createWork({ db, log = console, now = () => new Date(), recordEvent = a
       if (read) sendJson(req, res, 200, await email.status(url.searchParams.get('status')));
       else if (test) sendJson(req, res, 202, await email.sendTest(user));
       else {
-        const result = await email.retry(retry[1]);
+        const body = (await readJson(req)) || {};
+        const result = await email.retry(retry[1], { force: body.force === true });
         await recordEvent('email.retried', { actorId: user._id, message: retry[1] });
         sendJson(req, res, 202, result);
       }

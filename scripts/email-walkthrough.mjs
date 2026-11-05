@@ -293,7 +293,7 @@ try {
     await ADMIN.w(`document.querySelector('#email-delivery').open=true;true`);
     await waitFor(ADMIN, `!!document.querySelector('[data-email-retry]')`);
     const panel = `document.querySelector('#email-delivery').textContent`;
-    check('the Users screen shows queued, accepted, failed, and suppressed', await ADMIN.w(`/Queued \\d+ · Accepted \\d+ · Failed 1 · Suppressed \\d+/.test(${panel})`), await ADMIN.w(panel));
+    check('the Users screen shows queued, accepted, failed, and suppressed', await ADMIN.w(`/Queued \\d+ · Sent \\d+ · Failed 1 · Suppressed \\d+/.test(${panel})`), await ADMIN.w(panel));
     check('it says acceptance is not proof of delivery', await ADMIN.w(`${panel}.includes('does not prove it reached the inbox')`));
     check('it shows names, not addresses', await ADMIN.w(`!${panel}.includes('@jarc.example') && ${panel}.includes('Dante Developer')`));
     check('it shows the provider error name', await ADMIN.w(`${panel}.includes('invalid_parameter')`));

@@ -1,14 +1,15 @@
-// Email for My workspace through Resend (EMAIL_DELIVERY=resend). Off by default. The beta simulation never reaches this.
+// Email for My workspace, through a configured provider (EMAIL_DELIVERY; email-providers.cjs). Off by default. The beta
+// simulation never reaches this.
 // - Saving an action never depends on email: messages are queued after the save, and a queue or provider failure is logged
 //   and changes nothing else. In-app notifications are separate and always stored.
 // - Recipients come only from accounts and assignments on the server, one recipient per message, so no list is ever exposed.
 // - Action emails are on unless the person turns them off; reminder emails stay opt-in. Both are checked again before sending.
 // - Nothing is queued while delivery is off, so turning it on later never sends a backlog. Older queued messages expire.
 // - Sending claims one message at a time by moving its next attempt into the future, in one atomic write. If the process
-//   stops mid-send the claim runs out and the retry reuses the provider's idempotency key, so it cannot arrive twice.
+//   stops mid-send the claim runs out and the retry reuses the message's stable key, so it cannot arrive twice.
 // - Just before sending, the message's reason is rechecked against the live record: account, preference, access, and whether
 //   the step is still open. Otherwise it is suppressed with a reason.
-// - Status words: pending = queued, sent = accepted by the provider (not proof of inbox delivery), failed, skipped = suppressed.
+// - Status words: pending = queued, sent = taken by the provider (not proof of inbox delivery), failed, skipped = suppressed.
 //   Addresses and message content are never logged. email_outbox stays within its existing validator.
 const { ObjectId } = require('mongodb');
 const DeadlineCore = require('../../public/deadline-core.js');
@@ -17,13 +18,11 @@ const { HttpError } = require('../http.cjs');
 const { ADMINS } = require('./notifications.cjs');
 const { LABELS, renderEmail } = require('./email-templates.cjs');
 const { planTicketEmails, staleReason } = require('./email-events.cjs');
+const { RESEND_URL, createProvider } = require('./email-providers.cjs');
 
-const RESEND_URL = 'https://api.resend.com/emails';
-const USER_AGENT = 'JarcTech-Ticket';
 const BATCH = 20, MAX_ATTEMPTS = 5, STATUS_LIMIT = 50;
 const CLAIM_MS = 10 * 60000, MAX_AGE_MS = 48 * 3600000, SOON_MS = 500, PACE_MS = 120;
 const ID = /^[0-9a-f]{24}$/, ADDRESS = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
-const ERROR_NAME = /^[a-z_]{1,60}$/;
 const STATES = { pending: 'queued', sent: 'sent', failed: 'failed', skipped: 'suppressed' };
 
 function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Date(), log = console, settings = DeadlineCore.DEFAULTS, canSee = async () => true, instant = false, pace = PACE_MS }) {
@@ -32,12 +31,15 @@ function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Dat
   const enabled = Boolean(config && config.enabled);
   const testList = new Set(((config && config.testRecipients) || []).map(a => a.toLowerCase()));
   const mode = !enabled ? 'disabled' : testList.size ? 'test-only' : 'enabled';
+  const provider = enabled ? createProvider({ config, fetch, now }) : null;
+  const allowedDomains = ((config && config.allowedDomains) || []).map(d => d.toLowerCase());
+  const inCompany = address => !allowedDomains.length || allowedDomains.includes(String(address).split('@').pop().toLowerCase());
   const onTestList = user => !testList.size || testList.has(String(user.email).toLowerCase());
   const wantsMail = (user, event) => (event === 'reminder' ? user.emailReminders === true : user.emailActions !== false);
   const idOf = v => (ID.test(String(v)) ? new ObjectId(String(v)) : null);
   const userById = id => { const _id = idOf(id); return _id ? users.findOne({ _id }) : null; };
-  const replyToFor = actor => (actor && ADDRESS.test(String(actor.email || '')) ? actor.email : config.replyTo || null);
-  const blocked = (user, event) => (user.status !== 'active' || !ADDRESS.test(String(user.email || '')) ? 'account-unavailable' : !wantsMail(user, event) ? 'preference-off' : !onTestList(user) ? 'not-test-recipient' : null);
+  const replyToFor = actor => (actor && ADDRESS.test(String(actor.email || '')) && inCompany(actor.email) ? actor.email : config.replyTo || null);
+  const blocked = (user, event) => (user.status !== 'active' || !ADDRESS.test(String(user.email || '')) ? 'account-unavailable' : !inCompany(user.email) ? 'outside-company' : !wantsMail(user, event) ? 'preference-off' : !onTestList(user) ? 'not-test-recipient' : null);
 
   // ---- Queueing ----
   async function queue({ key, user, event, audience, record, ticket, change, data, render, replyTo, reviewer }) {
@@ -125,20 +127,9 @@ function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Dat
   }
 
   // ---- Sending ----
-  async function send(item, user) {
-    const generation = item.generation ? `#${item.generation}` : '';
-    const res = await fetch(RESEND_URL, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json', 'User-Agent': USER_AGENT, 'Idempotency-Key': `${item.key.slice(0, 240)}${generation}` },
-      body: JSON.stringify({ from: config.from, to: [user.email], subject: item.subject, text: item.text, ...(item.html ? { html: item.html } : {}), ...(item.replyTo ? { reply_to: item.replyTo } : {}) })
-    });
-    let body = {};
-    try { body = typeof res.json === 'function' ? await res.json() : {}; } catch {}
-    return { status: res.status, name: ERROR_NAME.test(String(body.name)) ? body.name : '', id: typeof body.id === 'string' ? body.id.slice(0, 100) : '' };
-  }
+  // The same message always goes with the same key, unless an Admin has started a new attempt.
+  const sendNow = (item, user) => provider.send({ key: `${item.key.slice(0, 240)}${item.generation ? `#${item.generation}` : ''}`, to: user.email, subject: item.subject, text: item.text, html: item.html, replyTo: item.replyTo });
   const backoff = attempts => Math.min(2 ** attempts * 5 * 60000, 6 * 3600000);
-  // The next midnight UTC, when Resend's daily quota resets.
-  const nextUtcDay = at => new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate() + 1, 0, 1));
 
   async function whyNot(item, user) {
     if (!user) return 'account-unavailable';
@@ -163,26 +154,20 @@ function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Dat
       const user = await users.findOne({ _id: item.userId });
       const reason = await whyNot(item, user);
       if (reason) { await outbox.updateOne({ _id: item._id }, { $set: { status: 'skipped', reason } }); continue; }
-      let result = { status: 0, name: '', id: '' };
-      try { result = await send(item, user); } catch {}
-      const attempts = item.attempts + 1, { status, name } = result;
-      if (status >= 200 && status < 300) {
-        await outbox.updateOne({ _id: item._id }, { $set: { status: 'sent', attempts, sentAt: now(), ...(result.id ? { providerId: result.id } : {}) }, $unset: { lastError: '' } });
+      let result;
+      try { result = await sendNow(item, user); }
+      catch { result = { outcome: 'retry', error: 'network', uncertain: true }; }
+      const attempts = item.attempts + 1;
+      if (result.outcome === 'sent') {
+        await outbox.updateOne({ _id: item._id }, { $set: { status: 'sent', attempts, sentAt: now(), ...(result.id ? { providerId: result.id } : {}) }, $unset: { lastError: '', inDoubt: '' } });
         sent++;
         if (pace) await new Promise(r => setTimeout(r, pace));
         continue;
       }
-      const error = status ? `HTTP ${status}${name ? ` ${name}` : ''}` : 'network';
-      const retryable = !status || status >= 500 || (status === 429 && name !== 'monthly_quota_exceeded') || (status === 409 && name !== 'invalid_idempotent_request');
-      const done = !retryable || attempts >= MAX_ATTEMPTS;
-      // A later manual retry may use a new idempotency key only if the provider cannot have accepted any attempt: a network
-      // error or a server error leaves that unknown, and the message keeps its key for good.
-      const refused = status >= 400 && status < 500;
-      const uncertain = Boolean(item.uncertain) || !status || status >= 500;
-      const quota = name === 'daily_quota_exceeded';
-      await outbox.updateOne({ _id: item._id }, { $set: { status: done ? 'failed' : 'pending', attempts: quota ? item.attempts : attempts, lastError: error, refused, uncertain, nextAttemptAt: quota ? nextUtcDay(now()) : new Date(now().getTime() + backoff(attempts)) } });
-      if (done) log.error(`Email: a message about ${item.record || 'a test'} could not be delivered (${error}).`);
-      if ([401, 403, 429].includes(status)) break;
+      const done = result.outcome === 'failed' || attempts >= MAX_ATTEMPTS;
+      await outbox.updateOne({ _id: item._id }, { $set: { status: done ? 'failed' : 'pending', attempts: result.keepAttempts ? item.attempts : attempts, lastError: result.error, refused: Boolean(result.refused), uncertain: Boolean(item.uncertain) || Boolean(result.uncertain), inDoubt: Boolean(result.inDoubt), nextAttemptAt: result.waitUntil || new Date(now().getTime() + backoff(attempts)) } });
+      if (done) log.error(`Email: a message about ${item.record || 'a test'} could not be delivered (${result.error}).`);
+      if (result.stop) break;
     }
     return { sent };
   }
@@ -204,21 +189,23 @@ function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Dat
     const grouped = await outbox.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]).toArray();
     const counts = { queued: 0, sent: 0, failed: 0, suppressed: 0 };
     for (const g of grouped) if (STATES[g._id]) counts[STATES[g._id]] = g.n;
-    const items = await outbox.find(query, { projection: { event: 1, record: 1, ticket: 1, userId: 1, status: 1, reason: 1, attempts: 1, lastError: 1, createdAt: 1, sentAt: 1 } }).sort({ _id: -1 }).limit(STATUS_LIMIT).toArray();
+    const items = await outbox.find(query, { projection: { event: 1, record: 1, ticket: 1, userId: 1, status: 1, reason: 1, attempts: 1, lastError: 1, inDoubt: 1, createdAt: 1, sentAt: 1 } }).sort({ _id: -1 }).limit(STATUS_LIMIT).toArray();
     const people = new Map((await users.find({ _id: { $in: [...new Set(items.map(i => String(i.userId)))].map(x => new ObjectId(x)) } }, { projection: { displayName: 1, email: 1 } }).toArray()).map(u => [String(u._id), u.displayName || u.email]));
     return {
-      delivery: mode, counts,
-      items: items.map(i => ({ id: String(i._id), record: i.record || '', ticket: i.ticket || '', event: LABELS[i.event] || 'Reminder or escalation', recipient: people.get(String(i.userId)) || 'A removed account', status: STATES[i.status] || i.status, reason: i.reason || '', attempts: i.attempts, error: i.lastError || '', at: i.createdAt, sentAt: i.sentAt || null, canRetry: enabled && i.status === 'failed' }))
+      delivery: mode, provider: provider ? provider.name : null, sentLabel: provider ? provider.sentLabel : 'Sent', counts,
+      items: items.map(i => ({ id: String(i._id), record: i.record || '', ticket: i.ticket || '', event: LABELS[i.event] || 'Reminder or escalation', recipient: people.get(String(i.userId)) || 'A removed account', status: STATES[i.status] || i.status, reason: i.reason || '', attempts: i.attempts, error: i.lastError || '', at: i.createdAt, sentAt: i.sentAt || null, canRetry: enabled && i.status === 'failed', inDoubt: Boolean(i.inDoubt) }))
     };
   }
   // Only a failed message, once: the status change is atomic. The live record is rechecked when it is sent.
-  async function retry(id) {
+  async function retry(id, { force = false } = {}) {
     if (!enabled) throw new HttpError(409, 'email-disabled');
     const _id = idOf(id);
     if (!_id) throw new HttpError(404, 'not-found');
     const failed = await outbox.findOne({ _id, status: 'failed' });
     if (!failed) throw new HttpError(409, 'not-retryable');
-    const update = { $set: { status: 'pending', attempts: 0, nextAttemptAt: now(), createdAt: now(), refused: false }, ...(failed.refused && !failed.uncertain ? { $inc: { generation: 1 } } : {}) };
+    // A message in doubt may have gone out, so a new attempt needs the Admin to accept that it could arrive twice.
+    if (failed.inDoubt && !force) throw new HttpError(409, 'in-doubt');
+    const update = { $set: { status: 'pending', attempts: 0, nextAttemptAt: now(), createdAt: now(), refused: false, inDoubt: false, ...(failed.inDoubt ? { uncertain: false } : {}) }, ...(failed.inDoubt || (failed.refused && !failed.uncertain) ? { $inc: { generation: 1 } } : {}) };
     const claimed = await outbox.findOneAndUpdate({ _id, status: 'failed', attempts: failed.attempts }, update, { returnDocument: 'after' });
     if (!claimed) throw new HttpError(409, 'not-retryable');
     soon();
@@ -241,7 +228,10 @@ function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Dat
     if (running) await running;
   }
 
-  return { enabled, mode, provider: config ? config.provider : 'disabled', enqueue, ticketSaved, process, status, retry, sendTest, stop };
+  // Reaches the provider without sending anything, where it can (Power Automate).
+  const check = async () => (provider && provider.check ? provider.check() : { ok: false, step: 'unavailable', code: '' });
+
+  return { enabled, mode, provider: config ? config.provider : 'disabled', check, enqueue, ticketSaved, process, status, retry, sendTest, stop };
 }
 
 module.exports = { RESEND_URL, createEmail };

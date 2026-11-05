@@ -1,6 +1,6 @@
-# Setting up email
+# Setting up email with Resend (not in use)
 
-What the owner does to turn email on, in order. The code is already deployed with email off. Nothing here needs Microsoft Graph,
+**The official deployment uses Power Automate instead: see [POWER-AUTOMATE-FLOW.md](POWER-AUTOMATE-FLOW.md).** This stays as the alternative. What the owner does to turn email on, in order. Nothing here needs Microsoft Graph,
 Teams, or any change in Entra. **Never put an API key in chat, Git, or a screenshot.**
 
 Limits and prices below were read from Resend's pages on 2026-11-05. Check them again on [resend.com/pricing](https://resend.com/pricing) before deciding.
