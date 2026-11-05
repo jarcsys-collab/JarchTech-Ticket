@@ -4,6 +4,14 @@
    records you may see on the server, one page at a time. Filters stay set while details open and close, and reset when the
    sidebar section or the simulated view changes. */
 let filters = ListFilter.empty(), listPage = 1, listSeq = 0, searchTimer = null;
+let listMode = 'active'; // or 'archived': the Admin's Archived view (My workspace), under the same list and filters
+
+const archivedList = () => listMode === 'archived' && accounts && canAdmin();
+const archiveTab = () => (accounts && canAdmin() ? `<button id="archived-tab" class="${archivedList() ? 'active' : ''}" aria-pressed="${archivedList()}">Archived</button>` : '');
+function wireArchiveTab() {
+  if ($('#archived-tab')) $('#archived-tab').onclick = () => { listMode = 'archived'; resetListFilters(); render(); };
+  if (archivedList() && typeof loadDeletionLog === 'function') loadDeletionLog();
+}
 
 function resetListFilters() { filters = ListFilter.empty(); listPage = 1; }
 
@@ -101,7 +109,7 @@ function records() {
   const seq = ++listSeq;
   $('#records').setAttribute('aria-busy', 'true');
   $('#result-count').textContent = 'Searching…';
-  server.search({ ...query.filters, scope, page: query.page, pageSize: query.pageSize, view: role }).then(r => {
+  server.search({ ...query.filters, scope, page: query.page, pageSize: query.pageSize, view: role, ...(archivedList() ? { archived: '1' } : {}) }).then(r => {
     if (seq !== listSeq) return; // a newer search replaced this one
     if (!r.ok) return showList({ error: r.message });
     // Keep the newest copy of each record so details open on what the search returned.
@@ -117,7 +125,8 @@ function showList(r) {
   const el = $('#records');
   if (!el) return;
   el.removeAttribute('aria-busy');
-  const noun = view === 'Projects' ? 'project' : 'ticket';
+  const archived = archivedList();
+  const noun = `${archived ? 'archived ' : ''}${view === 'Projects' ? 'project' : 'ticket'}`;
   if (r.error) {
     $('#result-count').textContent = '';
     $('#pager').innerHTML = '';
@@ -134,14 +143,20 @@ function showList(r) {
   if (!items.length) {
     el.innerHTML = filtered
       ? `<div class="empty"><strong>No ${noun}s match these filters.</strong><br>Try different search words, or clear the filters to see every ${noun} in this view.<div class="actions centered"><button class="secondary" id="empty-clear">Clear filters</button></div></div>`
+      : archived ? '<div class="empty">Nothing is archived. Finished requests you archive appear here, ready to restore.</div>'
       : '<div class="empty">No records here yet. New work will appear as you move through the workflow.</div>';
     if ($('#empty-clear')) $('#empty-clear').onclick = () => { resetListFilters(); render(); $('.search').focus(); };
   } else {
-    el.innerHTML = `<div class="group-title">⌄ &nbsp; ${view === 'Projects' ? 'Projects' : listTitle()} <small>${total} records</small></div><div class="table-wrap"><table><thead><tr><th>${view === 'Projects' ? 'PROJECT / REQUEST' : 'REQUEST'}</th><th>TYPE</th><th>STATUS</th><th>PRIORITY</th><th>ASSIGNEE</th><th>DELIVERY DATE</th><th>CONFIRMATIONS</th><th>PROGRESS</th></tr></thead><tbody>${items.map(t => `<tr data-id="${esc(t.id)}" tabindex="0"><td><span class="ticket-name">${esc(view === 'Projects' ? (t.projectName || t.title) : t.title)}</span><span class="ticket-id">${view === 'Projects' ? esc(t.project) + ' · ' : ''}${esc(t.id)} &nbsp; · &nbsp; ${esc(t.department)}</span></td><td>${typePill(WorkflowCore.typeOf(t))}</td><td>${pill(t.status)}</td><td>${pill(t.priority)}</td><td>${person(t.dev)}</td><td>${DeadlineCore.dueDate(t) ? dueText(t) : `<span class="requested">Requested ${esc(DeadlineCore.formatDate(DeadlineCore.requestedDate(t)))}</span>`}</td><td class="conf-cell">${confirmations(t)}</td><td>${prog(t)}</td></tr>`).join('')}</tbody></table></div>`;
+    el.innerHTML = `<div class="group-title">⌄ &nbsp; ${archived ? 'Archived' : view === 'Projects' ? 'Projects' : listTitle()} <small>${total} records</small></div><div class="table-wrap"><table><thead><tr><th>${view === 'Projects' ? 'PROJECT / REQUEST' : 'REQUEST'}</th><th>TYPE</th><th>STATUS</th><th>PRIORITY</th><th>ASSIGNEE</th><th>DELIVERY DATE</th><th>CONFIRMATIONS</th><th>PROGRESS</th>${archived ? '<th>ARCHIVED</th>' : ''}</tr></thead><tbody>${items.map(t => `<tr data-id="${esc(t.id)}" tabindex="0"><td><span class="ticket-name">${esc(view === 'Projects' ? (t.projectName || t.title) : t.title)}</span><span class="ticket-id">${view === 'Projects' ? esc(t.project) + ' · ' : ''}${esc(t.id)} &nbsp; · &nbsp; ${esc(t.department)}</span></td><td>${typePill(WorkflowCore.typeOf(t))}</td><td>${pill(t.status)}</td><td>${pill(t.priority)}</td><td>${person(t.dev)}</td><td>${DeadlineCore.dueDate(t) ? dueText(t) : `<span class="requested">Requested ${esc(DeadlineCore.formatDate(DeadlineCore.requestedDate(t)))}</span>`}</td><td class="conf-cell">${confirmations(t)}</td><td>${prog(t)}</td>${archived ? `<td class="archived-cell"><small>${esc(t.archived ? t.archived.time : '')}</small><button type="button" class="secondary" data-restore="${esc(t.id)}">Restore<span class="sr-only"> ${esc(t.id)}</span></button></td>` : ''}</tr>`).join('')}</tbody></table></div>`;
     el.querySelectorAll('[data-id]').forEach(x => {
-      const openRecord = () => view === 'Projects' ? projectView(x.dataset.id) : detail(x.dataset.id);
+      const openRecord = () => archived ? openArchived(x.dataset.id) : view === 'Projects' ? projectView(x.dataset.id) : detail(x.dataset.id);
       x.onclick = openRecord;
-      x.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openRecord(); } };
+      x.onkeydown = e => { if (e.target === x && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openRecord(); } };
+    });
+    el.querySelectorAll('[data-restore]').forEach(b => b.onclick = e => {
+      e.stopPropagation();
+      const t = state.tickets.find(x => x.id === b.dataset.restore);
+      if (t) restoreRecord(t).then(ok => { if (ok) render(); });
     });
   }
   $('#pager').innerHTML = pages > 1 ? `<nav class="pager" aria-label="${noun} pages"><button class="secondary" id="prev-page" ${page <= 1 ? 'disabled' : ''}>← Previous</button><span>Page ${page} of ${pages}</span><button class="secondary" id="next-page" ${page >= pages ? 'disabled' : ''}>Next →</button></nav>` : '';

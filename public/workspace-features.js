@@ -174,8 +174,8 @@
   detail = function (id) {
     baseDetail(id);
     const t = state.tickets.find(x => x.id === id), form = $('#comment-form');
-    if (!t || !form) return;
-    const all = t.history.flatMap(h => (h.attachments || []).map(f => ({ ...f, by: h.actor || h.view, time: h.time })));
+    if (!t) return;
+    const all =t.history.flatMap(h => (h.attachments || []).map(f => ({ ...f, by: h.actor || h.view, time: h.time })));
     if (all.length) {
       const section = document.createElement('section');
       section.className = 'ticket-files';
@@ -183,6 +183,7 @@
       section.innerHTML = `<ul class="file-links">${all.map(f => `<li><a href="${B.base}/attachments/${encodeURIComponent(f.id)}/download" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(R.formatSize(f.size))} · ${esc(f.by || '')} · ${esc(f.time)}</small></li>`).join('')}</ul>`;
       $('[data-section="activity"]').before(section);
     }
+    if (!form) return; // an archived request takes no comments
     const text = form.querySelector('textarea');
     text.required = false;
     const files = uploader(form, form.querySelector('.actions'));

@@ -406,7 +406,7 @@ test('5. Admin self-assignment works with independent Requestor confirmation', a
   await ok(admin, id, 'status', { status: 'Closed' });
 });
 
-test('self-requested and self-assigned work needs an independent Admin, on the request and on its scope changes', async () => {
+test('self-requested and self-assigned work: an Admin takes each side, a Developer needs an independent Admin, on the request and its scope changes', async () => {
   const otherAdmin = await signIn(7);
   await db.collection('users').updateOne({ email: 'person7@jarc.example' }, { $set: { role: 'Admin' } });
   const id = await newRequest(admin);
@@ -414,28 +414,31 @@ test('self-requested and self-assigned work needs an independent Admin, on the r
   await ok(admin, id, 'status', { status: 'In progress' });
   await ok(admin, id, 'add-evidence', { links: [{ url: 'https://example.com/x' }] });
   await ok(admin, id, 'worker-complete', { summary: 'Done' });
-  const refused = await act(admin, id, 'requestor-confirm');
-  assert.equal(refused.status, 403);
-  await ok(otherAdmin, id, 'requestor-confirm');
-  assert.equal((await ticketOf(id)).completion.requestor.id, await idOf(7));
+  assert.equal((await act(otherAdmin, id, 'requestor-confirm')).status, 403, 'the Requestor side is that Admin\'s own');
+  await ok(admin, id, 'requestor-confirm');
+  assert.equal((await ticketOf(id)).completion.requestor.id, adminId);
   await ok(admin, id, 'status', { status: 'Closed' });
 
-  // A Project where the Requestor is the worker: their own agreement to a scope change does not count.
-  const p = await newRequest(admin, { type: 'Project' });
-  await assign(admin, p, adminId);
-  await ok(admin, p, 'schedule-meeting', { meeting: '2030-01-05T10:00', location: 'Room' });
-  assert.equal((await act(admin, p, 'confirm-meeting')).status, 403);
+  // A Project where the Requestor is a Developer and the worker: their own agreement to a scope change does not count.
+  const devAccount = await signIn(9);
+  const devAccountId = await idOf(9);
+  await db.collection('users').updateOne({ _id: new ObjectId(devAccountId) }, { $set: { role: 'Developer' } });
+  const p = await newRequest(devAccount, { type: 'Project' });
+  await assign(admin, p, devAccountId);
+  await ok(devAccount, p, 'schedule-meeting', { meeting: '2030-01-05T10:00', location: 'Room' });
+  assert.equal((await act(devAccount, p, 'confirm-meeting')).status, 403);
   await ok(otherAdmin, p, 'confirm-meeting');
-  await ok(admin, p, 'record-agreement', { notes: 'N', requirements: 'R', criteria: 'C' });
-  await ok(admin, p, 'confirm-agreement');
-  assert.equal((await act(admin, p, 'confirm-agreement')).status, 409);
+  await ok(devAccount, p, 'record-agreement', { notes: 'N', requirements: 'R', criteria: 'C' });
+  await ok(devAccount, p, 'confirm-agreement');
+  assert.equal((await act(devAccount, p, 'confirm-agreement')).status, 409);
   await ok(otherAdmin, p, 'confirm-agreement');
-  await ok(admin, p, 'create-project', { projectName: 'P', date: FUTURE, tasks: [task(1, 'Person 1')] });
-  const cr = (await post(`${W}/tickets/${p}/changes`, admin, { requestId: `official-self-${Date.now()}`, ticketVersion: (await ticketOf(p)).version, input: { title: 'Self', reason: 'x', criteria: 'x' } })).json.created;
+  await ok(devAccount, p, 'create-project', { projectName: 'P', date: FUTURE, tasks: [task(1, 'Person 9')] });
+  const cr = (await post(`${W}/tickets/${p}/changes`, devAccount, { requestId: `official-self-${Date.now()}`, ticketVersion: (await ticketOf(p)).version, input: { title: 'Self', reason: 'x', criteria: 'x' } })).json.created;
   await changeAct(admin, cr, 'status', { status: 'Assessment' });
-  assert.equal((await changeAct(admin, cr, 'assess', { impact: 'x', effort: '1 day', date: '2030-07-01' })).status, 200);
-  assert.equal((await changeAct(admin, cr, 'agree')).status, 403, 'not their own agreement');
+  assert.equal((await changeAct(devAccount, cr, 'assess', { impact: 'x', effort: '1 day', date: '2030-07-01' })).status, 200);
+  assert.equal((await changeAct(devAccount, cr, 'agree')).status, 403, 'not their own agreement');
   assert.equal((await changeAct(otherAdmin, cr, 'agree')).status, 200);
+  await db.collection('users').updateOne({ _id: new ObjectId(devAccountId) }, { $set: { role: 'Requestor' } });
   await db.collection('users').updateOne({ email: 'person7@jarc.example' }, { $set: { role: 'Requestor' } });
 });
 

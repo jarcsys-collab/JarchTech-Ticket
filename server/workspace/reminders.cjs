@@ -3,7 +3,7 @@
 //   workspace and works out which reminders are due now (public/deadline-core.js).
 // - Each reminder is stored as an in-app notification whose key names the record, reminder type, deadline or state,
 //   and inbox, so it is created once however often or on however many instances the scan runs. A changed deadline or
-//   a new state is a new key; completed, cancelled, rejected, and paused work produces no reminders.
+//   a new state is a new key; completed, cancelled, rejected, paused, and archived work produces no reminders.
 // - The scan reads current state only, so after a restart or a missed run the next run catches up.
 // - If the instance holding the lease stops, the lease expires and another instance takes over.
 // - My workspace reminders may also be emailed (email.cjs); beta simulation reminders only reach simulated inboxes.
@@ -39,8 +39,8 @@ function createReminders({ db, workspaces, settings = DeadlineCore.DEFAULTS, ema
     const at = now();
     let created = 0;
     for (const ws of workspaces) {
-      // Before reading anything: finish any scope change update a restart interrupted.
-      await ws.recoverEffects();
+      // Before reading anything: finish any deletion or scope change update a restart interrupted.
+      await ws.recover();
       const items = [];
       for (const { ticket, changes } of await ws.scan()) {
         for (const r of DeadlineCore.reminders(ticket, changes, { now: at, settings })) items.push({ ...r, ticket });

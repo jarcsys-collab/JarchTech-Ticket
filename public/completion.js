@@ -17,7 +17,7 @@ function evidenceFile(item) {
   const href = window.JARC_SERVER ? `${window.JARC_SERVER.base}/attachments/${encodeURIComponent(f.id)}/download` : '';
   return href ? `<a href="${href}" download="${esc(f.name)}"><span aria-hidden="true">📎</span> ${esc(f.name)}</a> <small>${esc(AttachmentRules.formatSize(f.size))}</small>` : `<span>📎 ${esc(f.name)}</span>`;
 }
-const confirmedBy = c => c ? `<span class="confirmed">✓ ${esc(c.name)}</span> <small>${esc(c.view)} · ${esc(c.time || '')}</small>` : '<span class="pending">Pending</span>';
+const confirmedBy = c => c ? `<span class="confirmed">✓ ${esc(c.name)}</span> <small>${esc(c.capacity || c.view)} · ${esc(c.time || '')}</small>` : '<span class="pending">Pending</span>';
 
 function agreementPanel(t, dev) {
   if (WorkflowCore.typeOf(t) !== 'Project') return '';
@@ -40,11 +40,11 @@ function agreementPanel(t, dev) {
       <div class="scope-summary"><div><h4>Agreed requirements</h4><p>${esc(draft.requirements)}</p></div><div><h4>Acceptance criteria</h4><p>${esc(draft.criteria)}</p></div></div>
       <p class="read-only">Meeting notes: ${esc(draft.notes)}</p>
       <ul class="confirmations"><li><span>Worker</span>${confirmedBy(draft.worker)}</li><li><span>Requestor</span>${confirmedBy(draft.requestor)}</li></ul>
-      <p class="read-only">The agreement locks when both have confirmed. ${dev && !draft.requestor ? 'Editing the draft clears any confirmation.' : ''}</p></div>
-      <div class="actions">${dev && !draft.worker ? '<button class="primary" id="confirm-agreement">Confirm agreement (worker)</button>' : ''}${reviewer && !draft.requestor ? '<button class="primary" id="confirm-agreement">Confirm agreement</button>' : ''}${dev ? '<button class="secondary" id="record-agreement">Edit draft</button>' : ''}</div>`;
+      <p class="read-only">${selfService(t) ? 'You confirm as the worker and as the Requestor, as two separate actions. It locks after both.' : 'The agreement locks when both have confirmed.'} ${dev && !draft.requestor ? 'Editing the draft clears any confirmation.' : ''}</p></div>
+      <div class="actions">${dev && !draft.worker ? '<button class="primary" id="confirm-agreement">Confirm agreement (worker)</button>' : ''}${reviewer && !draft.requestor && !(dev && !draft.worker) ? `<button class="primary" id="confirm-agreement">Confirm agreement${selfService(t) ? ' (Requestor)' : ''}</button>` : ''}${dev ? '<button class="secondary" id="record-agreement">Edit draft</button>' : ''}</div>`;
   } else {
     const ready = t.meeting && t.meetingConfirmed;
-    body = `<p class="read-only">${!t.meeting ? 'No requirements meeting yet. A Project needs one before development.' : !t.meetingConfirmed ? 'Waiting for the Requestor to confirm the meeting.' : 'After the meeting, the worker records the agreed requirements and acceptance criteria.'}</p>${dev && ready ? '<div class="actions"><button class="primary" id="record-agreement">Record agreement</button></div>' : ''}`;
+    body = `<p class="read-only">${!t.meeting ? 'No requirements meeting yet. A Project needs one before development.' : !t.meetingConfirmed ? `${selfService(t) ? 'Confirm the meeting as the Requestor.' : 'Waiting for the Requestor to confirm the meeting.'}` : 'After the meeting, the worker records the agreed requirements and acceptance criteria.'}</p>${dev && ready ? '<div class="actions"><button class="primary" id="record-agreement">Record agreement</button></div>' : ''}`;
   }
   return `<section class="workflow-panel" data-section="agreement" data-title="Requirements agreement">${body}</section>`;
 }
@@ -67,31 +67,31 @@ function confirmationPanel(t, dev) {
   const project = WorkflowCore.typeOf(t) === 'Project';
   const completing = WorkflowCore.COMPLETING.includes(t.status);
   if (!completing && t.status !== 'In progress' && t.status !== 'Closed' && !c.log.length && !(t.corrections || []).length) return '';
-  const admin = canAdmin(), reviewer = canReview(t);
-  const gate = WorkflowCore.closable(t) ? '<span class="confirmed">Ready: an Admin can close this request.</span>'
+  const admin = canAdmin(), reviewer = canReview(t), self = selfService(t);
+  const gate = WorkflowCore.closable(t) ? `<span class="confirmed">Ready: ${self ? 'you can close this request as Admin' : 'an Admin can close this request'}.</span>`
     : t.status === 'Closed' ? 'Closed.'
-    : !c.worker ? 'Waiting for the worker to add evidence and mark the work done.'
-    : !c.requestor ? `Waiting for ${sameParty(t) ? `an Admin to review independently (${independentReason(t)})` : 'the Requestor to review the evidence and confirm'}.`
-    : 'Waiting for the worker to confirm the release or handover.';
+    : !c.worker ? (self ? 'Your next step is to add evidence and mark the work done as the worker.' : 'Waiting for the worker to add evidence and mark the work done.')
+    : !c.requestor ? self ? 'Your next step is to review the evidence and confirm as the Requestor.' : `Waiting for ${sameParty(t) ? `an Admin to review independently (${independentReason(t)})` : 'the Requestor to review the evidence and confirm'}.`
+    : self ? 'Your next step is to confirm the release or handover as the worker.' : 'Waiting for the worker to confirm the release or handover.';
   // Separate stages: worker completion, Requestor confirmation, (Project) release or handover, Admin closure. Each
   // shows who acts, its state in words (not only color), and only its own buttons.
   const btn = (show, html) => (show ? html : '');
   const state = (done, current) => done ? '<span class="stage-state done"><span aria-hidden="true">✓</span> Done</span>' : current ? '<span class="stage-state current"><span aria-hidden="true">●</span> Waiting</span>' : '<span class="stage-state todo"><span aria-hidden="true">○</span> Not yet</span>';
   const released = t.status === 'Released' || t.status === 'Closed';
   const stages = [
-    { title: 'Worker completion', who: t.dev ? `${esc(t.dev)} (worker)` : 'The assigned worker', done: Boolean(c.worker), current: !c.worker,
+    { title: 'Worker completion', who: self ? `You, ${esc(t.dev)} (as the worker)` : t.dev ? `${esc(t.dev)} (worker)` : 'The assigned worker', done: Boolean(c.worker), current: !c.worker,
       detail: c.worker ? confirmedBy(c.worker) : 'Adds evidence, then marks the work done.',
       buttons: btn(dev && t.status === 'In progress', '<button class="primary" id="worker-complete">Mark my work done</button>')
         + btn(dev && completing && !c.worker, '<button class="primary" id="worker-complete">Record my completion</button>')
         + btn(dev && t.status === 'Awaiting acceptance' && c.worker && !c.requestor, '<button class="secondary" id="withdraw-completion">Withdraw my completion</button>') },
-    { title: 'Requestor confirmation', who: sameParty(t) ? `An Admin other than the worker (${independentReason(t)})` : `${esc(t.name)} (Requestor)`, done: Boolean(c.requestor), current: Boolean(c.worker) && !c.requestor,
-      detail: c.requestor ? confirmedBy(c.requestor) : 'Reviews the evidence independently, then confirms or returns it for correction.',
-      buttons: btn(reviewer && completing && c.worker && !c.requestor, '<button class="primary" id="requestor-confirm">Confirm completion</button>')
+    { title: 'Requestor confirmation', who: self ? `You, ${esc(t.name)} (as the Requestor)` : sameParty(t) ? `An Admin other than the worker (${independentReason(t)})` : `${esc(t.name)} (Requestor)`, done: Boolean(c.requestor), current: Boolean(c.worker) && !c.requestor,
+      detail: c.requestor ? confirmedBy(c.requestor) : self ? 'A separate action from your worker completion: review the evidence, then confirm or return it for correction.' : 'Reviews the evidence independently, then confirms or returns it for correction.',
+      buttons: btn(reviewer && completing && c.worker && !c.requestor, `<button class="primary" id="requestor-confirm">Confirm completion${self ? ' as the Requestor' : ''}</button>`)
         + btn(reviewer && ['Awaiting acceptance', 'Ready for release'].includes(t.status), '<button class="secondary" data-reason="In progress">Return for correction</button>') },
-    ...(project ? [{ title: 'Release or handover', who: t.dev ? `${esc(t.dev)} (worker)` : 'The assigned worker', done: released, current: WorkflowCore.bothConfirmed(t) && !released,
+    ...(project ? [{ title: 'Release or handover', who: self ? `You, ${esc(t.dev)} (as the worker)` : t.dev ? `${esc(t.dev)} (worker)` : 'The assigned worker', done: released, current: WorkflowCore.bothConfirmed(t) && !released,
       detail: released ? '<span class="confirmed">Recorded</span>' : 'Recorded after both confirmations.',
       buttons: btn(dev && t.status === 'Ready for release' && c.worker && c.requestor, '<button class="primary" data-action="Released">Confirm release / handover</button>') }] : []),
-    { title: 'Admin closure', who: 'An Admin', done: t.status === 'Closed', current: WorkflowCore.closable(t),
+    { title: 'Admin closure', who: self ? 'You (as Admin)' : 'An Admin', done: t.status === 'Closed', current: WorkflowCore.closable(t),
       detail: t.status === 'Closed' ? '<span class="confirmed">Closed</span>' : WorkflowCore.closable(t) ? 'Ready to close.' : `Possible only after both confirmations${project ? ' and the handover' : ''}.`,
       buttons: btn(!project && dev && t.status === 'Ready for release' && c.worker && c.requestor, '<button class="secondary" data-action="Released">Record a handover (optional)</button>')
         + btn(admin && WorkflowCore.closable(t), '<button class="primary" data-action="Closed">Close request</button>')
@@ -99,7 +99,7 @@ function confirmationPanel(t, dev) {
   ];
   return `<section class="workflow-panel" data-section="confirmations" data-title="Completion and closure">
     <ol class="stages">${stages.map((x, i) => `<li class="stage${x.done ? ' is-done' : x.current ? ' is-current' : ''}"><div class="stage-head"><span class="stage-num" aria-hidden="true">${i + 1}</span><b>${x.title}</b>${state(x.done, x.current)}</div><p class="stage-who">${x.who}</p><p class="stage-detail">${x.detail}</p>${x.buttons ? `<div class="actions">${x.buttons}</div>` : ''}</li>`).join('')}</ol>
-    <p class="closure-gate"><b>Closure rule:</b> ${gate} One confirmation never counts as both.</p>
+    <p class="closure-gate"><b>Closure rule:</b> ${gate} ${self ? 'You are the Requestor and the worker on this request, so you take each step yourself. Each one is recorded separately, and one never counts as another.' : 'One confirmation never counts as both.'}</p>
     ${(t.corrections || []).length ? `<details class="corrections" open><summary>Corrections (${t.corrections.length})</summary>${t.corrections.slice().reverse().map(x => `<div class="event">Round ${x.round}: ${esc(x.reason)}<small>${esc(x.time || '')} · ${esc(x.name)} (${esc(x.view)})</small></div>`).join('')}</details>` : ''}
     ${c.log.length ? `<details class="corrections"><summary>Cleared confirmations (${c.log.length})</summary>${c.log.slice().reverse().map(x => `<div class="event">${esc(x.reason)} Worker: ${esc(x.worker ? x.worker.name : 'none')} · Requestor: ${esc(x.requestor ? x.requestor.name : 'none')}<small>${esc(x.time || '')}</small></div>`).join('')}</details>` : ''}
   </section>`;
@@ -107,7 +107,7 @@ function confirmationPanel(t, dev) {
 
 function agreementForm(t) {
   const d = t.agreementDraft || { notes: '', requirements: t.description, criteria: t.criteria || '' };
-  open(`<div class="tagline">${t.id} · REQUIREMENTS AGREEMENT</div><h2>${t.agreementDraft ? 'Edit agreement draft' : 'Record the agreement'}</h2><p>Meeting: ${esc((t.meeting || '').replace('T', ' · '))} · ${esc(t.location || '')}. The worker and the Requestor each confirm this; then it is locked.</p><form id="agreement-form"><div class="field-grid"><label class="full">Meeting notes *<textarea name="notes" required>${esc(d.notes)}</textarea></label><label class="full">Agreed requirements *<textarea name="requirements" required>${esc(d.requirements)}</textarea></label><label class="full">Acceptance criteria *<textarea name="criteria" required>${esc(d.criteria)}</textarea></label></div><div class="actions"><button class="primary">Save and request confirmations</button><button type="button" class="secondary" id="agreement-back">Back to ticket</button></div></form>`);
+  open(`<div class="tagline">${t.id} · REQUIREMENTS AGREEMENT</div><h2>${t.agreementDraft ? 'Edit agreement draft' : 'Record the agreement'}</h2><p>Meeting: ${esc((t.meeting || '').replace('T', ' · '))} · ${esc(t.location || '')}. ${selfService(t) ? 'You confirm this as the worker and as the Requestor, separately; then it is locked.' : 'The worker and the Requestor each confirm this; then it is locked.'}</p><form id="agreement-form"><div class="field-grid"><label class="full">Meeting notes *<textarea name="notes" required>${esc(d.notes)}</textarea></label><label class="full">Agreed requirements *<textarea name="requirements" required>${esc(d.requirements)}</textarea></label><label class="full">Acceptance criteria *<textarea name="criteria" required>${esc(d.criteria)}</textarea></label></div><div class="actions"><button class="primary">Save and request confirmations</button><button type="button" class="secondary" id="agreement-back">Back to ticket</button></div></form>`);
   $('#agreement-back').onclick = () => detail(t.id);
   $('#agreement-form').onsubmit = e => { e.preventDefault(); perform('ticket', t.id, 'record-agreement', Object.fromEntries(new FormData(e.target)), () => refresh(t.id)); };
 }
@@ -115,7 +115,7 @@ function agreementForm(t) {
 function completeForm(t) {
   if (WorkflowCore.typeOf(t) === 'Project' && t.tasks.some(x => !x.done)) return toast('Complete all project tasks, including internal testing, first');
   if (!WorkflowCore.activeEvidence(t).length) return toast('Add at least one evidence file or deliverable link first.');
-  open(`<div class="tagline">${t.id} · WORKER COMPLETION</div><h2>Mark my work done</h2><p>The Requestor then reviews your evidence and confirms independently. An Admin closes the request only after both confirmations.</p><form id="complete-form"><label>Delivery and testing summary *<textarea name="summary" required placeholder="What was delivered and tested? Where can the Requestor check it?">${esc(WorkflowCore.completionOf(t).summary || '')}</textarea></label><label class="task"><input type="checkbox" required>The work meets the acceptance criteria and the evidence supports it.</label><div class="actions"><button class="primary">Confirm my work is done</button></div></form>`);
+  open(`<div class="tagline">${t.id} · WORKER COMPLETION</div><h2>Mark my work done</h2><p>${selfService(t) ? 'This records your confirmation as the worker only. You then confirm separately as the Requestor, and close the request as Admin.' : 'The Requestor then reviews your evidence and confirms independently. An Admin closes the request only after both confirmations.'}</p><form id="complete-form"><label>Delivery and testing summary *<textarea name="summary" required placeholder="What was delivered and tested? Where can the Requestor check it?">${esc(WorkflowCore.completionOf(t).summary || '')}</textarea></label><label class="task"><input type="checkbox" required>The work meets the acceptance criteria and the evidence supports it.</label><div class="actions"><button class="primary">Confirm my work is done</button></div></form>`);
   $('#complete-form').onsubmit = e => { e.preventDefault(); perform('ticket', t.id, 'worker-complete', { summary: new FormData(e.target).get('summary') }, () => refresh(t.id)); };
 }
 

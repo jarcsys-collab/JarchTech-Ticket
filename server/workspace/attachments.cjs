@@ -220,6 +220,43 @@ function createAttachments({ db, workspace, names = { attachments: 'beta_attachm
     sweep().catch(err => log.error(`Attachment cleanup failed: ${err.name}`));
   }
 
+  // What deleting this request does to its files. Its files are the records attached to it and any it refers to. One
+  // that another record also uses, or that belongs to another record, is kept. An upload still pending is never touched.
+  // Returns { remove: [doc], keep: [{ doc, retainedBy }] }.
+  async function removalPlan(ticket) {
+    const ids = [...new Set([
+      ...(ticket.history || []).flatMap(h => (h.attachments || []).map(a => a.id)),
+      ...(ticket.evidence || []).filter(x => x.file).map(x => x.file.id)
+    ])].filter(x => ID.test(String(x)));
+    const docs = await files.find({ workspace, $or: [{ ticket: ticket.id }, { _id: { $in: ids.map(x => new ObjectId(x)) } }] }).toArray();
+    const hex = docs.map(d => d._id.toHexString());
+    const used = { $or: [{ 'history.attachments.id': { $in: hex } }, { 'evidence.file.id': { $in: hex } }] };
+    const elsewhere = new Map();
+    const others = await db.collection(names.tickets).find({ workspace, id: { $ne: ticket.id }, ...used }, { projection: { id: 1, 'history.attachments.id': 1, 'evidence.file.id': 1 } }).toArray();
+    for (const t of others) for (const x of [...(t.history || []).flatMap(h => (h.attachments || []).map(a => a.id)), ...(t.evidence || []).filter(e => e.file).map(e => e.file.id)]) elsewhere.set(x, t.id);
+    if (names.changes) {
+      const linked = await db.collection(names.changes).find({ workspace, ticket: { $ne: ticket.id }, 'history.attachments.id': { $in: hex } }, { projection: { ticket: 1, 'history.attachments.id': 1 } }).toArray();
+      for (const c of linked) for (const h of c.history || []) for (const a of h.attachments || []) elsewhere.set(a.id, c.ticket);
+    }
+    const plan = { remove: [], keep: [] };
+    for (const doc of docs) {
+      if (doc.state === 'pending') continue;
+      const retainedBy = doc.ticket && doc.ticket !== ticket.id ? doc.ticket : elsewhere.get(doc._id.toHexString());
+      if (retainedBy) plan.keep.push({ doc, retainedBy }); else plan.remove.push(doc);
+    }
+    return plan;
+  }
+  // Removes the request's own files, and hands any shared file to the record that keeps it. Safe to repeat.
+  async function removeForTicket(ticket) {
+    const plan = await removalPlan(ticket);
+    for (const { doc, retainedBy } of plan.keep) if (doc.ticket === ticket.id) await files.updateOne({ _id: doc._id }, { $set: { ticket: retainedBy } });
+    for (const doc of plan.remove) {
+      await files.deleteOne({ _id: doc._id });
+      await removeFile(doc._id); // if this stops here, sweep() removes the file: it no longer has a record
+    }
+    return plan;
+  }
+
   // Beta reset: deletes every attachment record of this workspace and every file in its bucket. Nothing else.
   async function reset() {
     const ids = [...(await files.find({ workspace }, { projection: { _id: 1 } }).toArray()), ...(await fileDocs.find({ 'metadata.workspace': workspace }, { projection: { _id: 1 } }).toArray())].map(d => d._id);
@@ -235,7 +272,7 @@ function createAttachments({ db, workspace, names = { attachments: 'beta_attachm
     return { bytes: u ? u.bytes : 0, files: u ? u.files : 0, quotaBytes };
   }
 
-  return { upload, download, remove, claim, finish, release, sweep, sweepSoon, reset, usage };
+  return { upload, download, remove, claim, finish, release, sweep, sweepSoon, reset, usage, removalPlan, removeForTicket };
 }
 
 module.exports = { AttachmentError, BUCKET, MAX_PENDING_PER_USER, PENDING_TTL_MS, WORKSPACE_QUOTA_BYTES, createAttachments, disposition, inspector };

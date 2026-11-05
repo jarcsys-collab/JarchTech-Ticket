@@ -179,3 +179,12 @@ body.simulated .beta-banner{background:#fff6e2;border:1px dashed #e0b450;color:#
 .combo-field{display:block}.combo{display:block;position:relative}.combo input{padding-right:34px;text-overflow:ellipsis}.combo-toggle{position:absolute;top:7px;right:1px;width:34px;height:40px;padding:0;border:0;background:none;color:#63777c;font-size:13px;cursor:pointer}.combo-list{position:absolute;z-index:20;left:0;right:0;margin:4px 0 0;padding:4px;list-style:none;max-height:230px;overflow-y:auto;overscroll-behavior:contain;background:white;border:1px solid #dfe8e9;border-radius:7px;box-shadow:0 10px 28px #0b3f4426}.combo-list[hidden]{display:none}.combo-list li{padding:9px 10px;border-radius:5px;font-size:12px;font-weight:400;line-height:1.35;color:#304b52;overflow-wrap:anywhere;cursor:pointer}.combo-list li:hover,.combo-list li.active{background:#e3f6f5}.combo-list li.active{outline:1px solid #8ed8da}.combo-list li.chosen{font-weight:600;color:#008d95}.combo-list li.combo-empty{color:#7a9295;cursor:default;background:none}
 .users-table .ticket-id{display:block}#user-confirm p{margin:0 0 10px}#user-confirm .actions{margin:0}.storage-warning{color:#a35c00;font-weight:600}#account-activity{margin:16px 0}
 @media(max-width:720px){main>header{flex-wrap:wrap;gap:10px;height:auto}.header-right{flex-wrap:wrap;justify-content:flex-start;gap:8px}.workspace-switch,.demo-role-label{flex:1 1 150px}.req-chips .chip{flex:1 1 auto}.combo-list{max-height:min(40vh,260px)}.combo-list li{padding:12px 10px;font-size:14px}.users-table thead{display:none}.users-table tr{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px 12px}.users-table td{padding:0;border:0;background:none}.users-table td:first-child{grid-column:1 / -1}.users-table select{width:100%}}
+
+/* Archive and delete */
+.record-name{font-size:15px}
+.record-effects{margin:8px 0 14px;padding-left:20px}.record-effects li{margin:6px 0}.record-effects ul{margin:4px 0;padding-left:18px}
+button.danger-solid{background:#b3261e;border-color:#b3261e;color:#fff}button.danger-solid:disabled{opacity:.5;cursor:not-allowed}
+.archived-banner{margin:12px 0}
+.archived-cell small{display:block;margin-bottom:4px;white-space:nowrap}
+.deletion-log{margin-top:16px;padding:12px 16px;border:1px solid #e3e8ea;border-radius:8px;background:#fff}.deletion-log summary{cursor:pointer;font-weight:600}
+.deletion-items{list-style:none;margin:8px 0 0;padding:0}.deletion-items li{padding:8px 0;border-top:1px solid #eef1f2}.deletion-items small{display:block;color:#5d6b70;margin-top:2px}

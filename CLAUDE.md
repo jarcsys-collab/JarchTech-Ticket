@@ -10,7 +10,7 @@ Read README.md, docs/REFERENCE-CHANGES.md, docs/BUILD-PLAN.md, and docs/WORKFLOW
 - Sidebar has ticket and project entries only. Do not restore standalone Meetings, Change requests, or Kanban tabs.
 - Roles (finalized by the owner): Requestors submit and track their own requests, provide requirements, review evidence, and confirm completion. Developers are the IT workers: they see work assigned to them plus their own requests, and do planning, execution, tasks, timelines, evidence, and the worker's completion confirmation (no assignment authority, no user management). Admins see all requests, manage users and roles, review and assign (to an active Developer or themselves), and perform final closure; a self-assigned Admin is the worker.
 - Every request has a type, separate from its category: a Ticket (simple work) or a Project (mandatory requirements meeting, an agreement confirmed by worker and Requestor and then locked, then a timeline). Changes after agreement use the linked scope change and create a new agreement version.
-- Closure needs two independent confirmations: the worker (with at least one evidence file or link) and the Requestor. One account never confirms both sides. Corrections, reassignment, and approved scope changes clear stale confirmations.
+- Closure needs two independent confirmations: the worker (with at least one evidence file or link) and the Requestor. One account never confirms both sides, except that an active Admin who is both the Requestor and the worker takes each step themselves, as separate actions recorded with their capacity (owner decision; see docs/WORKFLOW.md). Corrections, reassignment, and approved scope changes clear stale confirmations.
 - Keep the current request form fields until the owner defines type/category-specific forms.
 - Admins review, set priority, assign work to an active Developer or themselves, request clarification, or reject with a reason.
 - The assigned worker schedules the requirements meeting within ticket details. Requestor confirms it.
@@ -18,6 +18,7 @@ Read README.md, docs/REFERENCE-CHANGES.md, docs/BUILD-PLAN.md, and docs/WORKFLOW
 - A project is linked once to its original ticket. The requestor participates in monitoring and acceptance.
 - Clicking a project opens a Gantt view listing tasks, requirements, owners, and start/end dates.
 - New requirements use linked change assessment and approval. Fixes to agreed requirements stay on the original ticket.
+- Admins can archive finished requests (the normal way to clear active lists; Restore undoes it) or delete one permanently after typing its ID, leaving a minimal audit entry. Never archive or delete existing records yourself: the owner chooses them in the app.
 - Preserve the worker completion -> Requestor confirmation -> release/handover (required for Projects) -> Admin closure sequence.
 
 ## Architecture and boundaries
