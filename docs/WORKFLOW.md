@@ -72,6 +72,10 @@ New or changed requirements -> linked change -> Admin review -> worker impact as
 
 Changes are accessible through the original request's Linked change requests section, not a sidebar tab. Fixes to agreed requirements stay on the original request as corrections. A closed original need not be reopened for a separately tracked change.
 
+## Email
+
+Email only tells people that something needs them, and links to the request. Every action still happens in the app. See README, Email.
+
 ## Guidance
 
 The app shows each person the next step on a request and who takes it (see README, Guided next actions). The guidance is derived from the same workflow rules by trying the actions, so it cannot disagree with them; the server checks every action again.

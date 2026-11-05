@@ -194,10 +194,11 @@ function createStore(db, { now = () => new Date() } = {}) {
     return publicUser({ ...target, ...set });
   }
 
-  // The person's own settings (currently only email reminders, which are off unless they turn them on).
-  async function setPreferences(user, { emailReminders }) {
-    await users.updateOne({ _id: user._id }, { $set: { emailReminders: emailReminders === true, updatedAt: now() } });
-    await record('user.preferences', { actorId: user._id, subjectId: user._id, emailReminders: emailReminders === true });
+  // The person's own settings. Reminder email is off unless they turn it on; email asking them to act is on unless they
+  // turn it off (an account with no stored value receives it). changes: booleans, checked by the caller.
+  async function setPreferences(user, changes) {
+    await users.updateOne({ _id: user._id }, { $set: { ...changes, updatedAt: now() } });
+    await record('user.preferences', { actorId: user._id, subjectId: user._id, ...changes });
   }
 
   return { setPreferences, admit, createSession, getSession, deleteSession, listUsers, auditLog, inviteUser, updateUser, publicUser, record };

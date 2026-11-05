@@ -161,7 +161,7 @@ function createNotifications({ db, workspace, collection = 'beta_notifications',
     for (const r of items) {
       const inbox = addressing.resolve(r.to, r.ticket);
       if (!inbox) continue;
-      docs.push({ workspace, key: `${r.record}:reminder:${r.type}:${r.stage}:${inbox}`, inbox, type: r.type, title: r.title, text: `${r.record} · ${r.title}`.slice(0, MAX_TEXT), record: r.record, kind: r.kind, target: r.target, ticket: r.ticket.id, reminder: true, readBy: [], createdAt: at });
+      docs.push({ workspace, key: `${r.record}:reminder:${r.type}:${r.stage}:${inbox}`, inbox, type: r.type, title: r.title, text: `${r.record} · ${r.title}`.slice(0, MAX_TEXT), record: r.record, kind: r.kind, target: r.target, ticket: r.ticket.id, reminder: true, stage: r.stage, to: r.to, readBy: [], createdAt: at });
     }
     return insertNew(docs);
   }

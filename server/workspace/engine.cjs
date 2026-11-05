@@ -34,7 +34,7 @@ class Conflict extends Error {
 }
 
 // policy: see server/beta/index.cjs and server/work/index.cjs. settings: deadline settings (timezone, dueSoonDays).
-function createWorkspace({ db, policy, log = console, now = () => new Date(), recordEvent = async () => {}, settings = DeadlineCore.DEFAULTS, attachmentQuotaBytes }) {
+function createWorkspace({ db, policy, log = console, now = () => new Date(), recordEvent = async () => {}, settings = DeadlineCore.DEFAULTS, attachmentQuotaBytes, email = null }) {
   const WORKSPACE = policy.workspace;
   const names = policy.names;
   const base = policy.base.replace(/[/]/g, '\\/');
@@ -250,6 +250,7 @@ function createWorkspace({ db, policy, log = console, now = () => new Date(), re
     } catch (err) { await files.release(claimed); throw err; }
     await files.finish(claimed, id);
     await notify.deliver({ events: ticketEvents(current, saved, body.action, input), record: id, kind: 'ticket', target: ['create-project', 'edit-scope'].includes(body.action) ? 'project' : 'ticket', version: saved.version, ticket: saved, before: current, text: withFiles(`${id} · ${next.history[next.history.length - 1].text}`, claimed), actor, view: ctx.view, at });
+    if (email) await email.ticketSaved({ before: current, after: saved, action: body.action, input, actor }); // never throws: the save stands
     return { tickets: [toClient(saved)] };
   }
 

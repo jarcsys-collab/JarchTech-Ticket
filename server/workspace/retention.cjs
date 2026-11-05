@@ -57,7 +57,7 @@ function createRetention({ db, workspace, tickets, changes, notifications, outbo
     if (next.history.length < 2000) next.history.push(entry('Archived: removed from active lists. Nothing was deleted.', actor, 'Admin', at, null, 'Admin'));
     if (!await replaceIfCurrent(tickets, t, next, at)) throw await conflict('tickets', id);
     const cs = await changes.find({ workspace, ticket: id }, { projection: { id: 1 } }).toArray();
-    if (mail) await mail.updateMany({ status: 'pending', key: { $regex: keysOf(t, cs) } }, { $set: { status: 'skipped' } });
+    if (mail) await mail.updateMany({ status: 'pending', key: { $regex: keysOf(t, cs) } }, { $set: { status: 'skipped', reason: 'archived' } });
     await recordEvent('request.archived', { actorId: actor._id, ticket: id });
     return { tickets: [toClient(await tickets.findOne({ _id: t._id }))] };
   }

@@ -12,7 +12,7 @@
     'invalid-email': 'Enter a valid work email address.', 'invalid-role': 'Choose a role.', 'already-exists': 'That email address already has an account or invitation.',
     'cannot-change-self': 'You cannot change your own role or access.', 'last-admin': 'At least one active Admin must remain.', 'changed-meanwhile': 'This person was changed by someone else meanwhile. Review and try again.',
     'invitation-not-accepted': 'This person has not signed in yet, so their invitation is still pending.', 'admin-only': 'Only Admins can manage users and roles.',
-    'cross-origin': 'The request was blocked because it did not come from JarcTech Ticket.', 'rate-limited': 'Too many changes in a short time. Wait a moment and try again.'
+    'cross-origin': 'The request was blocked because it did not come from JarcTech Ticket.', 'email-disabled': 'Email delivery is not turned on.', 'not-retryable': 'This message is no longer waiting for a retry. Refresh to see its status.', 'test-too-soon': 'A test message was just queued. Wait a minute before asking for another.', 'not-test-recipient': 'Your account is not on the test recipient list, so no test message was sent.', 'email-preference-off': 'Email is turned off in your Settings, so no test message was sent.', 'rate-limited': 'Too many changes in a short time. Wait a moment and try again.'
   };
 
   const inspection = window.JARC_INSPECTION || null; // present only when the server enables INSPECTION_MODE
@@ -149,21 +149,23 @@
     $('#reset-sample').onclick = () => { if (confirm('Reset all inspection sample data in this browser? Your normal records are not affected.')) inspection.reset(); };
   }
 
-  // Your own settings: email reminders are opt-in, and only sent when the server has email delivery enabled.
+  // Your own settings. Email asking you to act is on unless you turn it off; reminder email is opt-in. Neither is sent
+  // unless the server has email delivery enabled.
   async function openSettings() {
     open('<div class="tagline">SETTINGS</div><h2>Your settings</h2><p>Loading…</p>');
     let prefs;
     try { prefs = await api('GET', '/api/v1/me/preferences'); }
     catch (err) { return open(`<div class="tagline">SETTINGS</div><h2>Your settings</h2><div class="banner">${esc(message(err))}</div>`); }
-    const on = prefs.emailDelivery === 'enabled';
+    const on = prefs.emailDelivery !== 'disabled';
     open(`<div class="tagline">SETTINGS</div><h2>Your settings</h2><p>Signed in as ${esc(me.displayName)} (${esc(me.email)}) · ${esc(me.role)}. Your role is set by an Admin.</p>
       <h3>Reminders</h3><p>Due-date reminders, overdue alerts, pending approvals, and escalations always appear in the app (the bell). Dates use ${esc((me.deadlines || {}).timezone || 'Asia/Manila')} time.</p>
-      <form id="prefs-form"><label class="task"><input type="checkbox" name="emailReminders" ${prefs.emailReminders ? 'checked' : ''} ${on ? '' : 'disabled'}>Also email me reminders and escalations (ticket number and reminder type only, with a sign-in link)</label>
-      <p class="read-only">${on ? 'Email delivery is on for this workspace.' : '<b>Not available:</b> email delivery is not set up for this workspace, so no emails are sent. Notifications appear in the app only.'}</p>
+      <h3>Email</h3><form id="prefs-form"><label class="task"><input type="checkbox" name="emailActions" ${prefs.emailActions ? 'checked' : ''} ${on ? '' : 'disabled'}>Email me when a request needs my action or is closed (assignment, meetings, agreements, completed work, corrections, closure)</label>
+      <label class="task"><input type="checkbox" name="emailReminders" ${prefs.emailReminders ? 'checked' : ''} ${on ? '' : 'disabled'}>Also email me reminders and escalations</label>
+      <p class="read-only">${prefs.emailDelivery === 'enabled' ? 'Email delivery is on for this workspace. Emails link to the request; you act in the app, and replies do not become comments.' : prefs.emailDelivery === 'test-only' ? '<b>Being tested:</b> email only reaches a few test accounts for now. Your choices are saved for when it opens to everyone.' : '<b>Not available:</b> email delivery is not set up for this workspace, so no emails are sent. Notifications appear in the app only.'}</p>
       ${on ? '<div class="actions"><button class="primary">Save settings</button></div>' : ''}</form>`);
     $('#prefs-form').onsubmit = async e => {
       e.preventDefault();
-      try { await api('PATCH', '/api/v1/me/preferences', { emailReminders: e.target.elements.emailReminders.checked }); toast('Settings saved'); close(); }
+      try { await api('PATCH', '/api/v1/me/preferences', { emailActions: e.target.elements.emailActions.checked, emailReminders: e.target.elements.emailReminders.checked }); toast('Settings saved'); close(); }
       catch (err) { toast(message(err)); }
     };
   }
@@ -219,6 +221,28 @@
   };
   const timeOf = at => new Date(at).toLocaleString('en-PH', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
+  // Email delivery for Admins: what is queued, accepted by the provider, failed, or suppressed, with a retry for failures.
+  const EMAIL_REASONS = { 'account-unavailable': 'account disabled or unavailable', 'preference-off': 'turned off in their settings', 'not-test-recipient': 'not a test recipient', 'record-unavailable': 'request deleted', archived: 'request archived', 'no-access': 'no longer has access', 'no-longer-involved': 'no longer involved', 'no-longer-needed': 'step already done or changed', superseded: 'replaced by a newer message', expired: 'waited too long' };
+  const EMAIL_STATE = { enabled: 'On for everyone involved.', 'test-only': 'On for the test recipients only.', disabled: 'Off. Notifications are in-app only, and nothing is queued.' };
+  async function loadEmailDelivery() {
+    const host = document.querySelector('#email-delivery-body');
+    if (!host) return;
+    let data;
+    try { data = await api('GET', '/api/v1/work/email'); }
+    catch (err) { host.innerHTML = `<p class="read-only">${esc(message(err))}</p>`; return; }
+    const c = data.counts;
+    const rows = data.items.map(i => `<tr><td>${esc(i.record || 'Test')}<span class="ticket-id">${esc(i.event)}</span></td><td>${esc(i.recipient)}</td><td>${esc(i.status === 'sent' ? 'Accepted by provider' : i.status[0].toUpperCase() + i.status.slice(1))}${i.reason ? `<span class="ticket-id">${esc(EMAIL_REASONS[i.reason] || i.reason)}</span>` : ''}${i.error ? `<span class="ticket-id">${esc(i.error)}</span>` : ''}</td><td>${esc(timeOf(i.sentAt || i.at))}${i.canRetry ? ` <button class="secondary" data-email-retry="${esc(i.id)}">Retry</button>` : ''}</td></tr>`).join('');
+    host.innerHTML = `<p><b>${esc(EMAIL_STATE[data.delivery] || '')}</b> Queued ${c.queued} · Accepted ${c.sent} · Failed ${c.failed} · Suppressed ${c.suppressed}</p>
+      <p class="read-only">"Accepted by provider" means Resend took the message. It does not prove it reached the inbox. In-app notifications are not affected by any of this.</p>
+      ${data.delivery === 'disabled' ? '' : '<div class="actions"><button class="secondary" id="email-test">Send a test email to myself</button><button class="secondary" id="email-refresh">Refresh</button></div>'}
+      ${rows ? `<div class="table-wrap"><table class="users-table"><thead><tr><th>Request</th><th>To</th><th>Status</th><th>When</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="read-only">No email has been queued.</p>'}`;
+    const again = host.querySelector('#email-refresh');
+    if (again) again.onclick = loadEmailDelivery;
+    const test = host.querySelector('#email-test');
+    if (test) test.onclick = async () => { test.disabled = true; try { await api('POST', '/api/v1/work/email/test', {}); toast('Test email queued'); } catch (err) { toast(message(err)); } loadEmailDelivery(); };
+    host.querySelectorAll('[data-email-retry]').forEach(b => b.onclick = async () => { b.disabled = true; try { await api('POST', `/api/v1/work/email/${b.dataset.emailRetry}/retry`, {}); toast('Queued again'); } catch (err) { toast(message(err)); } loadEmailDelivery(); });
+  }
+
   async function openUsers() {
     open('<div class="tagline">ADMIN</div><h2>Users</h2><p>Loading…</p>');
     let users, usage, activity = [];
@@ -252,7 +276,9 @@
       <div class="table-wrap"><table class="users-table"><thead><tr><th>Person</th><th>Role</th><th>Access</th></tr></thead><tbody>${rows}</tbody></table></div>
       <div id="user-confirm" class="banner" role="status" hidden></div>
       ${log}
+      <details class="activity-feed" id="email-delivery"><summary>Email delivery</summary><div id="email-delivery-body"><p class="read-only">Loading…</p></div></details>
       <h3>Invite someone before their first sign-in (optional)</h3><p class="read-only">Use this only to give someone a role from their very first sign-in. No email is sent: let them know, and they sign in with this same work email.</p><form id="invite-form"><div class="field-grid"><label class="full">Work email *<input name="email" type="email" required autocomplete="off"></label><label>Display name<input name="displayName" maxlength="120"></label><label>Role *<select name="role" required>${ROLES.map(r => `<option>${r}</option>`).join('')}</select></label></div><div class="actions"><button class="primary">Save invitation</button></div></form>`);
+    document.querySelector('#email-delivery').addEventListener('toggle', e => { if (e.target.open) loadEmailDelivery(); });
     // A role or access change takes effect at once, so it is confirmed first.
     document.querySelectorAll('[data-user]').forEach(select => select.onchange = () => {
       const u = users.find(x => x.id === select.dataset.user), field = select.dataset.field, value = select.value;

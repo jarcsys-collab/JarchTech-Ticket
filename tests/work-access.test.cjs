@@ -280,7 +280,9 @@ test('the beta simulation demonstrates the roles but never changes real roles or
 
 test('reminders: due soon to the assignee, escalation to Admins, confirmation, no duplicates, changed deadlines, completion', async () => {
   let clock = new Date();
-  const runner = createReminders({ db, workspaces: Object.values(app.auth.engines).filter(Boolean), settings: DeadlineCore.DEFAULTS, email: app.email, now: () => clock, log: { log() {}, error() {} } });
+  // The email side shares this test's clock, because each reminder is checked against the current time before it goes.
+  const email = createEmail({ config: { enabled: true, provider: 'resend', from: 'JarcTech Ticket <tickets@jarc.example>', apiKey: 'x', appUrl: origin }, db, now: () => clock, pace: 0, log: { log() {}, error() {} }, fetch: async (url, opts) => { sent.push({ url, opts }); return { status: 200 }; } });
+  const runner = createReminders({ db, workspaces: Object.values(app.auth.engines).filter(Boolean), settings: DeadlineCore.DEFAULTS, email, now: () => clock, log: { log() {}, error() {} } });
   const mine = async (cookie, filter = () => true) => (await call(`${W}/notifications?limit=50`, { cookie })).json.items.filter(n => n.reminder && n.record === ids.r1 && filter(n));
   await runner.runOnce();
   assert.equal((await mine(ADM)).length, 0, 'three days out: nothing yet');
@@ -294,11 +296,12 @@ test('reminders: due soon to the assignee, escalation to Admins, confirmation, n
   clock = new Date(Date.now() + 4 * DAY);
   await runner.runOnce();
   assert.ok((await mine(ADM)).some(n => n.title.startsWith('Overdue')));
-  const mail = sent.find(m => JSON.parse(m.opts.body).subject.includes(ids.r1));
+  const mail = sent.find(m => { const b = JSON.parse(m.opts.body); return b.subject.includes(ids.r1) && b.subject.includes('Overdue'); });
   assert.ok(mail, 'email for an opted-in assignee');
   const body = JSON.parse(mail.opts.body);
   assert.deepEqual(body.to, ['person2@jarc.example']);
-  assert.doesNotMatch(body.text + body.subject, /WORKTEST|Work access test|Person 4/, 'no summaries, descriptions, or names');
+  assert.doesNotMatch(body.text + body.subject, /Work access test|Person 4/, 'no descriptions or names of people in a reminder');
+  assert.doesNotMatch(body.subject, /WORKTEST/, 'and the title stays out of the subject');
   clock = new Date(Date.now() + 6 * DAY);
   await runner.runOnce();
   assert.equal((await mine(LEAD, n => n.title.startsWith('Escalated: delivery overdue'))).length, 1, 'escalated to the shared Admin inbox');
@@ -399,10 +402,13 @@ test('email stays off unless configured, reaches opted-in Admins for escalations
   await send('PATCH', '/api/v1/me/preferences', ADM, { emailReminders: false });
   await send('PATCH', '/api/v1/me/preferences', LEAD, { emailReminders: true });
   await send('PATCH', '/api/v1/me/preferences', DEV2, { emailReminders: true });
-  assert.equal(await flaky.enqueue([{ key: 'retry-test', inbox: 'admins', title: 'Reminder: request awaiting review', record: 'JRC-1' }]), 1, 'only the opted-in Admin of the Admin inbox, never a Developer');
+  await db.collection('email_outbox').deleteMany({}); // messages from the actions in earlier tests
+  const live = (await post(`${W}/tickets`, REQ1, { requestId: requestId(), input: request({ title: 'WORKTEST email retry' }) })).json.created;
+  assert.equal(await flaky.enqueue([{ key: 'retry-test', inbox: 'admins', title: 'Reminder: request awaiting review', record: live, ticket: live }]), 1, 'only the opted-in Admin of the Admin inbox, never a Developer');
   await flaky.process();
   const item = await db.collection('email_outbox').findOne({ key: /^retry-test:/ });
-  assert.equal(item.to, 'person1@jarc.example');
+  assert.equal(String(item.userId), String((await db.collection('users').findOne({ email: 'person1@jarc.example' }))._id));
+  assert.equal(item.to, '', 'the address is read from the account when sending, not kept in the queue');
   assert.equal(item.status, 'pending'); assert.equal(item.attempts, 1); assert.equal(item.lastError, 'HTTP 503');
   await send('PATCH', '/api/v1/me/preferences', LEAD, { emailReminders: false });
   await db.collection('email_outbox').updateOne({ _id: item._id }, { $set: { nextAttemptAt: new Date(0) } });
