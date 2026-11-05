@@ -160,6 +160,24 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
     return sendJson(req, res, 405, { error: 'method-not-allowed' });
   }
 
+  // The Power Automate flow's only way in. A dedicated secret, not a session: it can collect queued messages and report on
+  // them, and reaches nothing else. It cannot create a message, choose a recipient, or read a request. Off, it does not exist.
+  async function emailFlow(req, res, pathname) {
+    if (!mailer.collects) return sendJson(req, res, 404, { error: 'not-found' });
+    const hit = limits.take('emailflow', clientAddress(req, { trustProxy: deployed }));
+    if (hit) return limited(req, res, hit);
+    const bearer = /^Bearer (.+)$/.exec(String(req.headers.authorization || ''));
+    if (!mailer.authorizes(bearer && bearer[1])) {
+      log.error('Email flow: a request with a wrong or missing secret was refused.');
+      return sendJson(req, res, 401, { error: 'unauthorized' }, req.complete ? {} : { Connection: 'close' });
+    }
+    if (req.method !== 'POST') return sendJson(req, res, 405, { error: 'method-not-allowed' });
+    if (pathname === '/api/v1/email-flow/check') return sendJson(req, res, 200, { ok: true });
+    if (pathname === '/api/v1/email-flow/collect') return sendJson(req, res, 200, await mailer.collect());
+    if (pathname === '/api/v1/email-flow/report') return sendJson(req, res, 200, await mailer.report(await readJson(req)));
+    return sendJson(req, res, 404, { error: 'not-found' });
+  }
+
   // Handles /auth/* and /api/v1/*. Returns false for other paths.
   async function handle(req, res, pathname) {
     try {
@@ -177,6 +195,7 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
       }
       if (pathname === '/auth/signed-out' && req.method === 'GET') { sendHtml(req, res, 200, pages.signedOut()); return true; }
       if (pathname.startsWith('/auth/')) { sendHtml(req, res, 404, pages.failed('This sign-in address does not exist.')); return true; }
+      if (pathname.startsWith('/api/v1/email-flow/')) { await emailFlow(req, res, pathname); return true; }
       if (pathname.startsWith('/api/')) { await api(req, res, pathname); return true; }
       return false;
     } catch (err) {

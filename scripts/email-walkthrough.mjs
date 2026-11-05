@@ -327,6 +327,36 @@ try {
     await OTHER.shot('email-09-message-phone.png');
     await OTHER.cdp.send('Emulation.clearDeviceMetricsOverride');
 
+    section = 'Power Automate: the flow collects';
+    const flowPort = await freePort(), flowOrigin = `http://localhost:${flowPort}`, flowSecret = 'walkthrough-collect-secret-0123456789-abcdef';
+    const flowApp = await start(loadConfig({ ...env, PORT: String(flowPort), APP_BASE_URL: flowOrigin, EMAIL_DELIVERY: 'power-automate', EMAIL_COLLECT_SECRET: flowSecret, EMAIL_ALLOWED_DOMAINS: 'jarc.example' }), { ...options, scheduler: false, emailFetch: async () => { throw new Error('the app must never send'); } });
+    try {
+      const flowCall = async (route, body) => (await fetch(`${flowOrigin}/api/v1/email-flow/${route}`, { method: 'POST', headers: { Authorization: `Bearer ${flowSecret}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined })).json();
+      await outbox.deleteMany({});
+      await ADMIN.nav(`${flowOrigin}/`); // the session cookie is shared by every localhost port
+      await ADMIN.settle();
+      const mailCount = mail.length;
+      const flowTicket = await submit(REQ, 'Collected message', 'Ticket');
+      await act(ADMIN, flowTicket, 'assign', { dev: devId, priority: 'Low' });
+      const collected = (await flowCall('collect')).messages;
+      check('the flow collects one message, with the request link', collected.length === 1 && collected[0].to === 'staff2@jarc.example' && collected[0].html.includes(`${flowOrigin}/?request=${flowTicket}`));
+      check('the app itself called no mail service', mail.length === mailCount);
+      await flowCall('report', { id: collected[0].id, claim: collected[0].claim, eventId: collected[0].eventId, outcome: 'in-doubt' });
+      await ADMIN.do(`__w.click('#manage-users')`);
+      await waitFor(ADMIN, `!!document.querySelector('#email-delivery')`);
+      await ADMIN.w(`document.querySelector('#email-delivery').open=true;true`);
+      await waitFor(ADMIN, `!!document.querySelector('[data-email-force]')`);
+      check('the status says when the flow last collected', await ADMIN.w(`document.querySelector('#email-flow-seen').textContent.includes('last collected')`));
+      check('a message in doubt offers only a deliberate new send', await ADMIN.w(`document.querySelector('[data-email-force]').textContent==='Send again (may duplicate)'`));
+      await ADMIN.shot('email-10-in-doubt.png');
+      await ADMIN.w(`document.querySelector('[data-email-force]').click();true`);
+      await waitFor(ADMIN, `!document.querySelector('[data-email-force]')`);
+      const again = (await flowCall('collect')).messages;
+      check('choosing it queues one new attempt, with a new event ID', again.length === 1 && again[0].id === collected[0].id && again[0].eventId !== collected[0].eventId);
+      await flowCall('report', { id: again[0].id, claim: again[0].claim, eventId: again[0].eventId, outcome: 'sent' });
+      check('then it shows as sent by Outlook', (await outbox.findOne({ ticket: flowTicket })).status === 'sent');
+    } finally { await flowApp.shutdown(); }
+
     section = 'page health';
     for (const [P, who] of [[ADMIN, 'Admin'], [DEV, 'Developer'], [REQ, 'Requestor'], [OUTSIDE, 'signed-out person']]) {
       check(`${who}: no script errors`, P.cdp.errors.length === 0, P.cdp.errors.slice(0, 3).join(' | '));

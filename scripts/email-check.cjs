@@ -1,8 +1,7 @@
-// Checks the configured email connection without sending any email, and without touching any record: the settings are valid,
-// the app can sign in, and the flow answers. It prints no secrets, addresses, or flow URL. Read-only, so it can run at any time.
+// Checks the email settings without sending any email and without collecting any message: the settings are valid, and the
+// running app accepts the flow's secret. It prints no secrets or addresses. Safe to run at any time.
 //   railway run -p <project> -s <service> -e production npm run email:check
 const { ConfigError, loadConfig } = require('../server/config.cjs');
-const { createProvider } = require('../server/workspace/email-providers.cjs');
 
 (async () => {
   let config;
@@ -18,8 +17,9 @@ const { createProvider } = require('../server/workspace/email-providers.cjs');
   console.log(`Test recipients only: ${email.testRecipients.length ? 'yes' : 'no'}`);
   if (email.provider !== 'power-automate') return console.log('This provider has no connection check.');
   console.log(`Allowed domains: ${email.allowedDomains.join(', ')}`);
-  const result = await createProvider({ config: email, fetch: globalThis.fetch, now: () => new Date() }).check();
-  if (result.ok) return console.log('Sign-in: ok. Flow: on, and it answered. No email was sent. This cannot prove the Outlook connection is still valid.');
-  console.error(`Failed at ${result.step}${result.code ? ` (${result.code})` : ''}. No email was sent.`);
+  console.log(`Previous secret also accepted: ${email.collectSecrets.length > 1 ? 'yes' : 'no'}`);
+  const res = await fetch(`${email.appUrl}/api/v1/email-flow/check`, { method: 'POST', headers: { Authorization: `Bearer ${email.collectSecrets[0]}` } });
+  if (res.status === 200) return console.log('The running app has delivery on and accepts this secret. Nothing was collected or sent. This does not prove the flow is on: see Users, Email delivery.');
+  console.error(res.status === 404 ? 'The running app has delivery off, or has not redeployed yet.' : `The running app refused it (HTTP ${res.status}).`);
   process.exit(1);
 })().catch(err => { console.error(`Check failed: ${err.name}`); process.exit(1); });

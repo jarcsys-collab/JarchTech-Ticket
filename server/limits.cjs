@@ -5,13 +5,15 @@ const RULES = {
   signin: { max: 60, windowMs: 60000 },   // per client address: /auth/login and /auth/callback
   read: { max: 1200, windowMs: 60000 },   // per account
   write: { max: 180, windowMs: 60000 },   // per account
-  upload: { max: 60, windowMs: 600000 }   // per account; files are at most 10 MB each
+  upload: { max: 60, windowMs: 600000 },  // per account; files are at most 10 MB each
+  emailflow: { max: 60, windowMs: 60000 } // per client address, wrong secrets included: the flow needs about 12 a run
 };
 const MESSAGES = {
   signin: 'Too many sign-in attempts from this address. Wait a minute and try again.',
   read: 'Too many requests. Wait a moment and try again.',
   write: 'Too many changes in a short time. Wait a moment and try again; your entry is still here.',
-  upload: 'Too many uploads in a short time. Wait a few minutes and try again.'
+  upload: 'Too many uploads in a short time. Wait a few minutes and try again.',
+  emailflow: 'Too many requests.'
 };
 
 function createLimits({ enabled = true, now = Date.now, rules = RULES } = {}) {

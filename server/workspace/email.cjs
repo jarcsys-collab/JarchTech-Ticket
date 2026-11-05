@@ -9,8 +9,16 @@
 //   stops mid-send the claim runs out and the retry reuses the message's stable key, so it cannot arrive twice.
 // - Just before sending, the message's reason is rechecked against the live record: account, preference, access, and whether
 //   the step is still open. Otherwise it is suppressed with a reason.
+// - With Power Automate the app sends nothing. A scheduled flow collects a small batch with a dedicated secret, sends each
+//   message through Outlook, and reports back. Nothing here can send email, so a leaked secret cannot send any. Delivery is
+//   not exactly-once. Each message has a stable event ID, which the flow records in a ledger before sending, so:
+//     stopped before the ledger entry   offered again, and sent
+//     stopped after sending, or Outlook timed out   the ledger cannot say whether it went: "in doubt". It is never resent
+//       by itself. Admins are told, and an Admin who has checked Sent Items may choose to send it again
+//     sent, but the report was lost   offered again; the ledger says already sent, and nothing goes out
 // - Status words: pending = queued, sent = taken by the provider (not proof of inbox delivery), failed, skipped = suppressed.
 //   Addresses and message content are never logged. email_outbox stays within its existing validator.
+const { createHash, randomUUID, timingSafeEqual } = require('node:crypto');
 const { ObjectId } = require('mongodb');
 const DeadlineCore = require('../../public/deadline-core.js');
 const { requestPath } = require('../auth/return-path.cjs');
@@ -21,6 +29,9 @@ const { planTicketEmails, staleReason } = require('./email-events.cjs');
 const { RESEND_URL, createProvider } = require('./email-providers.cjs');
 
 const BATCH = 20, MAX_ATTEMPTS = 5, STATUS_LIMIT = 50;
+const COLLECT_LOCK = 'email-collect', COLLECT_BATCH = 10, COLLECT_SCAN = 50, COLLECT_CLAIM_MS = 20 * 60000, STALLED_MS = 30 * 60000;
+const REPORTS = ['sent', 'already-sent', 'rejected', 'in-doubt', 'outlook-failed', 'ledger-unavailable'];
+const SAFE_CODE = /^[A-Za-z0-9_-]{1,40}$/, EVENT_ID = /^[0-9a-f]{64}$/, TICKET_RECORD = /^(JRC|CR)-\d+$/;
 const CLAIM_MS = 10 * 60000, MAX_AGE_MS = 48 * 3600000, SOON_MS = 500, PACE_MS = 120;
 const ID = /^[0-9a-f]{24}$/, ADDRESS = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
 const STATES = { pending: 'queued', sent: 'sent', failed: 'failed', skipped: 'suppressed' };
@@ -31,7 +42,9 @@ function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Dat
   const enabled = Boolean(config && config.enabled);
   const testList = new Set(((config && config.testRecipients) || []).map(a => a.toLowerCase()));
   const mode = !enabled ? 'disabled' : testList.size ? 'test-only' : 'enabled';
-  const provider = enabled ? createProvider({ config, fetch, now }) : null;
+  const collects = enabled && config.provider === 'power-automate';
+  const provider = enabled && !collects ? createProvider({ config, fetch, now }) : null;
+  const locks = db.collection('scheduler_locks'), notes = db.collection('notifications');
   const allowedDomains = ((config && config.allowedDomains) || []).map(d => d.toLowerCase());
   const inCompany = address => !allowedDomains.length || allowedDomains.includes(String(address).split('@').pop().toLowerCase());
   const onTestList = user => !testList.size || testList.has(String(user.email).toLowerCase());
@@ -174,11 +187,12 @@ function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Dat
   let running = null, timer = null;
   function process() {
     if (!enabled) return Promise.resolve({ sent: 0 });
+    if (collects) return sweep().catch(err => { log.error(`Email: the queue check failed (${err.name}).`); }).then(() => ({ sent: 0 }));
     running ??= run().catch(err => { log.error(`Email: the send run failed (${err.name}). The next run will retry.`); return { sent: 0 }; }).finally(() => { running = null; });
     return running;
   }
   function soon() {
-    if (!instant || timer) return;
+    if (!instant || collects || timer) return;
     timer = setTimeout(() => { timer = null; process(); }, SOON_MS);
     timer.unref();
   }
@@ -192,7 +206,8 @@ function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Dat
     const items = await outbox.find(query, { projection: { event: 1, record: 1, ticket: 1, userId: 1, status: 1, reason: 1, attempts: 1, lastError: 1, inDoubt: 1, createdAt: 1, sentAt: 1 } }).sort({ _id: -1 }).limit(STATUS_LIMIT).toArray();
     const people = new Map((await users.find({ _id: { $in: [...new Set(items.map(i => String(i.userId)))].map(x => new ObjectId(x)) } }, { projection: { displayName: 1, email: 1 } }).toArray()).map(u => [String(u._id), u.displayName || u.email]));
     return {
-      delivery: mode, provider: provider ? provider.name : null, sentLabel: provider ? provider.sentLabel : 'Sent', counts,
+      delivery: mode, provider: collects ? 'power-automate' : provider ? provider.name : null, sentLabel: collects ? 'Sent by Outlook' : provider ? provider.sentLabel : 'Sent', counts,
+      ...(collects ? { lastCollectedAt: ((await locks.findOne({ _id: COLLECT_LOCK })) || {}).lastCollectedAt || null, stalledAfterMinutes: 15 } : {}),
       items: items.map(i => ({ id: String(i._id), record: i.record || '', ticket: i.ticket || '', event: LABELS[i.event] || 'Reminder or escalation', recipient: people.get(String(i.userId)) || 'A removed account', status: STATES[i.status] || i.status, reason: i.reason || '', attempts: i.attempts, error: i.lastError || '', at: i.createdAt, sentAt: i.sentAt || null, canRetry: enabled && i.status === 'failed', inDoubt: Boolean(i.inDoubt) }))
     };
   }
@@ -205,7 +220,7 @@ function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Dat
     if (!failed) throw new HttpError(409, 'not-retryable');
     // A message in doubt may have gone out, so a new attempt needs the Admin to accept that it could arrive twice.
     if (failed.inDoubt && !force) throw new HttpError(409, 'in-doubt');
-    const update = { $set: { status: 'pending', attempts: 0, nextAttemptAt: now(), createdAt: now(), refused: false, inDoubt: false, ...(failed.inDoubt ? { uncertain: false } : {}) }, ...(failed.inDoubt || (failed.refused && !failed.uncertain) ? { $inc: { generation: 1 } } : {}) };
+    const update = { $set: { status: 'pending', attempts: 0, collected: 0, nextAttemptAt: now(), createdAt: now(), refused: false, inDoubt: false, ...(failed.inDoubt ? { uncertain: false } : {}) }, ...(failed.inDoubt || (failed.refused && !failed.uncertain) ? { $inc: { generation: 1 } } : {}) };
     const claimed = await outbox.findOneAndUpdate({ _id, status: 'failed', attempts: failed.attempts }, update, { returnDocument: 'after' });
     if (!claimed) throw new HttpError(409, 'not-retryable');
     soon();
@@ -223,15 +238,112 @@ function createEmail({ config, db, fetch = globalThis.fetch, now = () => new Dat
     soon();
     return { status: 'queued' };
   }
+  // ---- Power Automate: the flow collects, sends, and reports ----
+  const digest = v => createHash('sha256').update(String(v)).digest();
+  const secrets = collects ? config.collectSecrets.map(digest) : [];
+  // Two secrets at once only while one replaces the other.
+  function authorizes(presented) {
+    if (!collects || typeof presented !== 'string' || !presented) return false;
+    const given = digest(presented);
+    return secrets.reduce((ok, s) => timingSafeEqual(s, given) || ok, false);
+  }
+  const eventIdOf = item => createHash('sha256').update(`${item.key}#${item.generation || 0}`).digest('hex');
+
+  // In-app, because nobody watches a status screen. The text holds no recipient or message content.
+  async function alertAdmins(item, suffix, title) {
+    if (!TICKET_RECORD.test(String(item.record || ''))) return;
+    const doc = { workspace: 'main', key: `${item.record}:${suffix}`, inbox: ADMINS, type: 'email', title, text: 'Open Users, then Email delivery, to see what needs doing.', record: item.record, kind: 'ticket', target: 'ticket', ticket: item.ticket, reminder: true, readBy: [], createdAt: now() };
+    try { await notes.insertOne(doc); }
+    catch (err) { if (err.code !== 11000) log.error(`Email: an Admin alert could not be stored (${err.name}).`); }
+  }
+  async function markInDoubt(item, attempts) {
+    await outbox.updateOne({ _id: item._id }, { $set: { status: 'failed', attempts, inDoubt: true, uncertain: true, lastError: 'in doubt' }, $unset: { awaitingReport: '' } });
+    log.error(`Email: a message about ${item.record || 'a test'} may or may not have gone out, and was not resent.`);
+    await alertAdmins(item, `email-in-doubt:${item._id}`, 'Email in doubt: it may not have gone out');
+  }
+  // Runs with the reminder scheduler, so it notices when the flow has stopped collecting.
+  async function sweep() {
+    const at = now(), expiry = new Date(at.getTime() - MAX_AGE_MS);
+    for (const item of await outbox.find({ status: 'pending', createdAt: { $lt: expiry } }).toArray()) {
+      if (item.collected) await markInDoubt(item, item.attempts); // handed to the flow, never reported: it may have gone
+      else await outbox.updateOne({ _id: item._id, status: 'pending' }, { $set: { status: 'skipped', reason: 'expired' } });
+    }
+    const waiting = await outbox.findOne({ status: 'pending', createdAt: { $lt: new Date(at.getTime() - STALLED_MS) } }, { sort: { createdAt: 1 } });
+    if (waiting) {
+      log.error('Email: messages have been waiting over 30 minutes. Check that the flow is on and its connections work.');
+      await alertAdmins(waiting, `email-stalled:${at.toISOString().slice(0, 10)}`, 'Email is not going out: messages are waiting');
+    }
+  }
+  async function releaseIfDone(run) {
+    if (run && !await outbox.findOne({ collectRun: run, status: 'pending', awaitingReport: true }, { projection: { _id: 1 } })) await locks.updateOne({ _id: COLLECT_LOCK, owner: run }, { $set: { leaseUntil: now() } });
+  }
+  // One bounded batch. A second collection while a batch is out gets nothing, even if the flow's own limit is misconfigured.
+  async function collect() {
+    if (!collects) throw new HttpError(404, 'not-found');
+    await sweep();
+    const at = now(), run = randomUUID();
+    let lock;
+    try { lock = await locks.findOneAndUpdate({ _id: COLLECT_LOCK, leaseUntil: { $lte: at } }, { $set: { owner: run, leaseUntil: new Date(at.getTime() + COLLECT_CLAIM_MS), lastCollectedAt: at } }, { upsert: true, returnDocument: 'after' }); }
+    catch (err) {
+      if (err.code !== 11000) throw err;
+      await locks.updateOne({ _id: COLLECT_LOCK }, { $set: { lastCollectedAt: at } });
+      return { messages: [], busy: true };
+    }
+    if (lock.pausedUntil && lock.pausedUntil > at) { await locks.updateOne({ _id: COLLECT_LOCK }, { $set: { leaseUntil: at } }); return { messages: [], paused: true }; }
+    const messages = [];
+    for (const due of await outbox.find({ status: 'pending', nextAttemptAt: { $lte: at } }).sort({ nextAttemptAt: 1 }).limit(COLLECT_SCAN).toArray()) {
+      if (messages.length >= COLLECT_BATCH) break;
+      const claim = randomUUID();
+      const item = await outbox.findOneAndUpdate({ _id: due._id, status: 'pending', nextAttemptAt: { $lte: now() } }, { $set: { nextAttemptAt: new Date(now().getTime() + COLLECT_CLAIM_MS), claim, collectRun: run, awaitingReport: true }, $inc: { collected: 1 } }, { returnDocument: 'after' });
+      if (!item) continue;
+      const user = await users.findOne({ _id: item.userId });
+      const reason = await whyNot(item, user);
+      if (reason) { await outbox.updateOne({ _id: item._id }, { $set: { status: 'skipped', reason }, $unset: { awaitingReport: '' } }); continue; }
+      messages.push({ id: String(item._id), claim, eventId: eventIdOf(item), to: user.email, subject: item.subject, html: item.html, replyTo: item.replyTo || '' });
+    }
+    await releaseIfDone(run);
+    return { messages };
+  }
+  // What happened to one message. Safe to repeat. "Sent" always counts, even late, because it is the truth; any other report
+  // counts only for the current claim, so a slow old run cannot overrule a newer one.
+  async function report(body) {
+    if (!collects) throw new HttpError(404, 'not-found');
+    const { id, eventId, claim, outcome, code } = body || {};
+    const _id = idOf(id);
+    if (!_id || !EVENT_ID.test(String(eventId)) || !REPORTS.includes(outcome) || (code !== undefined && code !== '' && !SAFE_CODE.test(String(code)))) throw new HttpError(400, 'invalid-report');
+    const item = await outbox.findOne({ _id });
+    if (!item) return { ok: true, gone: true }; // deleted with its request
+    if (eventIdOf(item) !== eventId) return { ok: true, ignored: true }; // an Admin has started a new attempt since
+    if (outcome === 'sent' || outcome === 'already-sent') {
+      await outbox.updateOne({ _id }, { $set: { status: 'sent', sentAt: item.sentAt || now(), attempts: item.attempts + 1, providerId: outcome }, $unset: { lastError: '', inDoubt: '', awaitingReport: '', reason: '' } });
+      await releaseIfDone(item.collectRun);
+      return { ok: true };
+    }
+    if (item.status !== 'pending' || !item.awaitingReport || item.claim !== claim) return { ok: true, ignored: true };
+    const attempts = item.attempts + 1;
+    if (outcome === 'in-doubt') await markInDoubt(item, attempts);
+    else {
+      const error = outcome === 'rejected' ? `rejected ${code || ''}`.trim() : outcome === 'ledger-unavailable' ? 'ledger unavailable' : `Outlook ${code || ''}`.trim();
+      const done = outcome === 'rejected' || attempts >= MAX_ATTEMPTS;
+      await outbox.updateOne({ _id }, { $set: { status: done ? 'failed' : 'pending', attempts, lastError: error, refused: true, nextAttemptAt: new Date(now().getTime() + backoff(attempts)) }, $unset: { awaitingReport: '' } });
+      if (done) {
+        log.error(`Email: a message about ${item.record || 'a test'} could not be delivered (${error}).`);
+        await alertAdmins(item, `email-failed:${item._id}`, 'Email could not be sent');
+      }
+      // An expired connection or throttling would fail the next message too, so the flow's next few runs collect nothing.
+      const code_ = String(code || '');
+      if (outcome === 'outlook-failed' && ['401', '403', '404', '429'].includes(code_)) await locks.updateOne({ _id: COLLECT_LOCK }, { $set: { pausedUntil: new Date(now().getTime() + (code_ === '429' ? 5 : 15) * 60000) } });
+    }
+    await releaseIfDone(item.collectRun);
+    return { ok: true };
+  }
+
   async function stop() {
     clearTimeout(timer); timer = null;
     if (running) await running;
   }
 
-  // Reaches the provider without sending anything, where it can (Power Automate).
-  const check = async () => (provider && provider.check ? provider.check() : { ok: false, step: 'unavailable', code: '' });
-
-  return { enabled, mode, provider: config ? config.provider : 'disabled', check, enqueue, ticketSaved, process, status, retry, sendTest, stop };
+  return { enabled, mode, provider: config ? config.provider : 'disabled', collects, authorizes, collect, report, enqueue, ticketSaved, process, status, retry, sendTest, stop };
 }
 
 module.exports = { RESEND_URL, createEmail };

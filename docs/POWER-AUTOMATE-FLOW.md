@@ -1,112 +1,126 @@
 # The Power Automate email flow
 
-How JarcTech Ticket sends email through the Office 365 Outlook connector, and exactly what the flow must contain. The app keeps
-its queue, recipients, templates, preferences, stale checks, and retries. The flow only checks a message, records it, and sends it.
+JarcTech Ticket keeps its queue, recipients, templates, preferences, and stale checks. A scheduled flow collects a small batch from
+the app every 2 minutes, sends each message through Outlook, and reports back. The app holds nothing that can send email, and the flow
+has no trigger anyone can call. **No Entra registration is involved.**
 
-Keep this document in step with the flow. It holds no addresses, URLs, or secrets; those live in Railway and in the flow.
+Keep this document in step with the flow. It holds no secrets or addresses; those live in Railway and in the flow.
 
 ## Pieces
 
 | Piece | Name | Notes |
 | --- | --- | --- |
-| Entra app registration | `JarcTech Ticket Email` | **Needs Entra rights.** No API permissions and no redirect URI. Separate from the sign-in registration, so its secret can be replaced on its own. Note the secret's expiry date |
-| Flow | `JarcTech Ticket - Send Email` | In a solution if the environment allows, so that ownership can change later |
-| SharePoint list | `JarcTech Ticket Email Ledger` | Duplicate protection. Holds a hash and a status, nothing personal |
-| Sender | a shared mailbox | Fixed in the flow. Its display name is what recipients see, so name it "JarcTech Ticket" |
+| Flow | `JarcTech Ticket - Send Email` | Scheduled. Owner needs Power Automate Premium. Add a co-owner |
+| SharePoint list | `JarcTech Ticket Email Ledger` | Holds a hash and a status per message, nothing personal |
+| Sender | a shared mailbox | Fixed in the flow. Its display name is what recipients see |
+| Secret | `EMAIL_COLLECT_SECRET` | In Railway and in two actions of the flow. At least 32 random characters |
 
-The flow's owner account needs Power Automate Premium, because the plan follows the owner and the HTTP trigger is a premium feature. Add a
-co-owner. If the owner leaves with no other owner, the flow must be recreated; if their connections go, actions fail until a remaining
-owner updates them. Microsoft's Outlook connector does not support service principals, so the Outlook connection is always a signed-in account,
-and that account needs access to the shared mailbox. A dedicated service account is better than a person's account.
+If the owner leaves with no other owner, the flow must be recreated. If their connections go, those actions fail until a remaining owner updates them. The Outlook connector doesn't support service principals, so its connection is a signed-in account, and a dedicated service account is better than a person's.
 
-## What the app sends
+## What the secret can do
 
-`POST` to the trigger with a token for `https://service.flow.microsoft.com/`, signed in as `JarcTech Ticket Email`. Body, per [trigger-schema.json](../deploy/power-automate/trigger-schema.json):
+`Authorization: Bearer <secret>` reaches three routes, and nothing else. All are POST. They are rate limited to 60 requests a minute per address, and answer 404 while delivery is off.
 
-```json
-{ "schema": 1, "eventId": "<64 hex characters, the same on every retry>", "to": "<one address>", "subject": "...", "html": "...", "replyTo": "<address or empty>" }
-```
+| Route | Does |
+| --- | --- |
+| `/api/v1/email-flow/check` | Confirms the secret. Reads nothing |
+| `/api/v1/email-flow/collect` | Returns up to 10 due messages: `{ "messages": [{ "id", "claim", "eventId", "to", "subject", "html", "replyTo" }] }` |
+| `/api/v1/email-flow/report` | Takes `{ "id", "claim", "eventId", "outcome", "code" }` for one message |
 
-A connection check sends `"check": true` with empty fields and must never reach a mail action.
+It can't create a message, choose a recipient, or read a request. If it leaks, someone could read queued recipients, subjects, and message text, and falsify results; they can't send email. **To rotate it:** in Railway set `EMAIL_COLLECT_SECRET_PREVIOUS` to the old value and `EMAIL_COLLECT_SECRET` to a new one; update both actions in the flow; delete `EMAIL_COLLECT_SECRET_PREVIOUS`.
 
-## What the flow answers
+## Delivery is not exactly-once
 
-| Answer | Meaning to the app | App does |
+Each message has a stable `eventId`. The flow records it in the ledger **before** sending, and the list refuses a second entry with the same ID.
+
+| What happened | What the ledger shows | Result |
 | --- | --- | --- |
-| `200 {"outcome":"sent"}` | Outlook's send action succeeded | Sent |
-| `200 {"outcome":"already-sent"}` | An earlier attempt sent it | Sent, nothing goes out again |
-| `200 {"outcome":"check"}` | The connection check | Nothing is sent |
-| `422 {"outcome":"rejected","code":"..."}` | The flow refused it | Failed |
-| `409 {"outcome":"in-doubt"}` | An earlier attempt started, and its result is unknown | Retries, then asks an Admin |
-| `502 {"outcome":"in-doubt"}` | Outlook timed out, so the mail may have gone | Retries, then asks an Admin |
-| `502 {"outcome":"outlook-failed","code":"<status>"}` | Outlook definitely failed | 401, 403, 404: failed, stops the run. 429: waits. Others: retries |
-| `503 {"outcome":"ledger-unavailable"}` | SharePoint failed, nothing was sent | Retries |
-| `202` with no outcome | The flow accepted it, and **nothing says Outlook sent it**. The Response actions are missing | Not counted as sent |
+| The run stopped before the ledger entry | No entry | Collected again after 20 minutes, and sent |
+| Outlook definitely failed | The flow removes its entry | Retried by the app, up to 5 attempts |
+| Sent, but the report was lost | `sent` | Collected again; the flow reports `already-sent`; **nothing goes out** |
+| The run stopped between the ledger entry and the send result | `sending` | **In doubt** |
+| Outlook timed out (Microsoft says a 504 doesn't mean it failed) | `sending` | **In doubt** |
+| Collected but never reported, for 48 hours | Unknown | **In doubt** |
+
+**In doubt is never resent by itself, and never silently dropped.** The message is marked failed, the log says so without its content, and Admins get an in-app alert. An Admin checks the mailbox's Sent Items, then either leaves it, or chooses **Send again (may duplicate)** under Users → Email delivery. That starts a new attempt with a new `eventId`, so a duplicate is possible only by that choice.
+
+A message can still be lost if the process stops between saving an action and queuing its email. Sent status means Outlook's send action succeeded, not that it reached an inbox.
+
+## Overlaps and batches
+
+- The flow's trigger has concurrency 1, and the app also holds a lease. A collection while a batch is out gets an empty list, even if the flow is misconfigured.
+- One batch is at most 10 messages. A claim lasts 20 minutes.
+- After Outlook reports 401, 403, or 404, collections pause for 15 minutes; after 429, 5 minutes.
+- Messages are checked against the live record when collected, so a message can only be up to one batch out of date when sent.
 
 ## The flow, step by step
 
-Action names matter, because the expressions use them. On **every** SharePoint and Outlook action: **Settings → Retry policy → None**. Retries belong to the app, because a retried Outlook action can send twice.
+Action names matter, because expressions use them. **Set Retry policy to None on the SharePoint and Outlook actions**: a retried Outlook action can send twice. Leave the `Report` action's default retry on, because reports are safe to repeat.
 
-**Trigger: When an HTTP request is received**
-- Who can trigger the flow: **Specific users in my tenant**. Allowed users: the **object ID of the service principal** of `JarcTech Ticket Email` (Enterprise applications, not App registrations). **Never "Anyone".**
-- Method: POST. Schema: paste `trigger-schema.json`.
+**Don't use Parse JSON or Compose on message data.** Microsoft's docs (written for Logic Apps, the engine underneath) say they can't hide data, and they stop hiding from passing downstream.
 
-**1. Condition `Is_check`**: `triggerBody()?['check']` is equal to `true`
-- Yes: **Response** `Respond_check`, status 200, body `{"outcome":"check"}`; then **Terminate**, Succeeded.
+**Trigger: Recurrence** every 2 minutes. Settings → Concurrency Control: **on, degree 1**. Microsoft notes that turning this on can't be undone without re-adding the trigger.
 
-**2. Condition `Is_allowed`**, all of these:
-- `triggerBody()?['schema']` equals `1`
-- `length(triggerBody()?['eventId'])` equals `64`
-- `endsWith(toLower(triggerBody()?['to']), '@<company-domain>')` is true
-- `contains(triggerBody()?['to'], ';')` is false, and `contains(triggerBody()?['to'], ',')` is false
-- `or(empty(triggerBody()?['replyTo']), endsWith(toLower(triggerBody()?['replyTo']), '@<company-domain>'))` is true
-- No: **Response** `Respond_rejected`, status 422, body `{"outcome":"rejected","code":"recipient"}`; then **Terminate**, Succeeded.
+**1. Initialize variables** (at the top, before the loop): `Outcome` (string), `Code` (string).
 
-**3. SharePoint: Create item** `Claim_in_ledger`: the ledger list, Title = `triggerBody()?['eventId']`, Status = `sending`.
+**2. HTTP `Collect`:** POST to `<app address>/api/v1/email-flow/collect`, header `Authorization` = `Bearer <secret>`. Settings: **Secure Inputs on, Secure Outputs on**, Retry policy None.
 
-**4. Condition `Claimed`**, with **run after: Claim_in_ledger succeeded, failed**: `actions('Claim_in_ledger')?['status']` equals `Succeeded`.
+**3. Apply to each `Each_message`** over `body('Collect')?['messages']`. Leave concurrency off, so messages go one at a time. Inside it:
 
-**Yes branch:**
-
-- a. **Office 365 Outlook: Send an email from a shared mailbox (V2)** `Send_email`: Original Mailbox Address = the shared mailbox, typed in, never from the request. To = `triggerBody()?['to']`. Subject = `triggerBody()?['subject']`. Body = `triggerBody()?['html']`. Reply To = `triggerBody()?['replyTo']`. Settings → Action timeout = `PT90S`.
-- b. Condition `Sent`, **run after: Send_email succeeded, failed, timed out**: `actions('Send_email')?['status']` equals `Succeeded`.
-  - Yes: **SharePoint: Update item** `Ledger_sent`, Status = `sent`. Then **Response** `Respond_sent`, **run after: Ledger_sent succeeded, failed**, status 200, body `{"outcome":"sent"}`.
-  - No: Condition `Timed_out`: `or(equals(actions('Send_email')?['status'], 'TimedOut'), equals(string(outputs('Send_email')?['statusCode']), '504'))` is true.
-    - Yes: **Response** status 502, body `{"outcome":"in-doubt"}`. The ledger entry stays, because Microsoft says a 504 does not mean the mail failed.
-    - No: **SharePoint: Delete item** `Ledger_clear`, so a retry can send. Then **Response**, **run after: Ledger_clear succeeded, failed**, status 502, body `{"outcome":"outlook-failed","code":"@{outputs('Send_email')?['statusCode']}"}`.
-
-**No branch:** (the claim failed: a duplicate, or SharePoint is down)
-
-- a. **SharePoint: Get items** `Find_entry`: Filter Query `Title eq '@{triggerBody()?['eventId']}'`, Top Count 1.
-- b. Condition `Found`, **run after: Find_entry succeeded, failed**: `length(coalesce(body('Find_entry')?['value'], json('[]')))` is greater than `0`.
-  - No: **Response** status 503, body `{"outcome":"ledger-unavailable"}`.
-  - Yes: Condition `Already_sent`: `first(body('Find_entry')?['value'])?['Status']` equals `sent`.
-    - Yes: **Response** status 200, body `{"outcome":"already-sent"}`.
-    - No: **Response** status 409, body `{"outcome":"in-doubt"}`.
-
-Don't put Response actions in parallel branches: Microsoft documents that they aren't supported there. Every path above must reach a Response, or the app sees an error.
+- a. Set `Outcome` to empty and `Code` to empty.
+- b. Condition `Is_allowed`, all of these:
+  - `endsWith(toLower(items('Each_message')?['to']), '@<company-domain>')` is true (use `or` for several domains)
+  - `contains(items('Each_message')?['to'], ';')` is false, and `contains(items('Each_message')?['to'], ',')` is false
+  - `length(items('Each_message')?['eventId'])` equals `64`
+  - `or(empty(items('Each_message')?['replyTo']), endsWith(toLower(items('Each_message')?['replyTo']), '@<company-domain>'))` is true
+- c. **No:** set `Outcome` = `rejected`, `Code` = `recipient`.
+- d. **Yes:** SharePoint **Create item** `Claim_in_ledger`: Title = `items('Each_message')?['eventId']`, Status = `sending`. Then Condition `Claimed`, **run after succeeded, failed**: `actions('Claim_in_ledger')?['status']` equals `Succeeded`.
+  - **Yes:** Outlook **Send an email from a shared mailbox (V2)** `Send_email`: Original Mailbox Address typed in, never from the message. To, Subject, Body (html), and Reply To from `items('Each_message')`. Settings: **Secure Inputs on**, Action timeout `PT90S`, Retry None. Then Condition `Sent`, **run after succeeded, failed, timed out**: `actions('Send_email')?['status']` equals `Succeeded`.
+    - Yes: SharePoint **Update item** `Ledger_sent`, Status = `sent`, Retry None. Then, **run after succeeded, failed**, set `Outcome` = `sent`.
+    - No: Condition `Timed_out`: `or(equals(actions('Send_email')?['status'], 'TimedOut'), equals(string(outputs('Send_email')?['statusCode']), '504'))`.
+      - Yes: set `Outcome` = `in-doubt`. Leave the ledger entry.
+      - No: SharePoint **Delete item** `Ledger_clear`. Then, **run after succeeded, failed**, set `Outcome` = `outlook-failed`, `Code` = `string(outputs('Send_email')?['statusCode'])`.
+  - **No:** SharePoint **Get items** `Find_entry`: Filter Query `Title eq '@{items('Each_message')?['eventId']}'`, Top Count 1. Then Condition `Found`, **run after succeeded, failed**: `length(coalesce(body('Find_entry')?['value'], json('[]')))` is greater than 0.
+    - No: set `Outcome` = `ledger-unavailable`. Nothing was sent.
+    - Yes: if `first(body('Find_entry')?['value'])?['Status']` equals `sent`, set `Outcome` = `already-sent`; otherwise `in-doubt`.
+- e. HTTP `Report`, last in the loop, **run after the condition above succeeded, failed**: POST to `<app address>/api/v1/email-flow/report`, header `Authorization` = `Bearer <secret>`, header `Content-Type` = `application/json`, body with `id`, `claim`, and `eventId` from `items('Each_message')`, and `outcome` = variable `Outcome`, `code` = variable `Code`. Settings: **Secure Inputs on, Secure Outputs on**.
 
 ## The ledger list
 
 A new SharePoint list on a site the flow's account can edit:
-- **Title**: List settings → Title → **Enforce unique values: Yes**. This is what makes duplicates impossible.
+- **Title**: List settings → Title → **Enforce unique values: Yes**. This is what makes a second send impossible.
 - **Status**: a single line of text.
 
-It holds hashes, not addresses or content. It grows by one short row per email, and nothing prunes it yet: delete rows older than a few days whenever you like, since the app's messages expire after 48 hours.
+Rows older than a few days can be deleted at any time; a message retried after 48 hours is treated as in doubt anyway. Nothing prunes the list automatically yet.
 
-## Checking and switching
+## After the first real email
 
-- `npm run email:check` signs in and calls the flow with `check`. It sends nothing, and it proves the secret, the allowed caller, and that the flow is on. **It cannot prove the Outlook connection still works.**
-- **To stop email at once:** set Railway's `EMAIL_DELIVERY` to `disabled`. To stop it from the Microsoft side, turn the flow off; messages wait, retry, and expire after 48 hours. Saved actions and in-app notifications carry on either way.
+Open that run's history and confirm **no recipient, subject, or message body is visible** in any step. Microsoft's Power Automate page on this could not be read, and its Logic Apps page says hiding carries only to actions that use the hidden output directly, so this needs checking in your tenant. If anything shows, turn on Secure Inputs and Outputs for that action. Run history is kept for 30 days, and Microsoft doesn't state whether owners can reveal hidden values.
+
+## Limits (read from Microsoft on 2026-11-05)
+
+- **Official Premium limit: 40,000 Power Platform requests per user per 24 hours**, across all of that user's flows. **During the current transition period Microsoft applies 200,000 per flow instead.** Enforcement of the official limit starts at least six months after usage reporting is generally available. Microsoft calls these figures approximate.
+- All actions count, including failed ones and retries. Microsoft doesn't say whether the trigger counts.
+- **My estimate, not a measurement:** a run with nothing to send uses about 3 actions, so 720 runs is about 2,200 a day. Each email adds about 10. At 300 emails a day that's about 5,200, or 13% of 40,000. The account's other flows share that limit. Check it under the flow's **Analytics → Actions**.
+- Over the limit, flows slow down. A flow consistently over it for 14 days is turned off.
+- Outlook: 300 calls a minute per connection, plus Exchange's own limits. SharePoint: 600 calls a minute per connection. Neither is close at 10 messages per 2 minutes (about 7,200 a day at most).
+
+## Connectors and policy
+
+Microsoft's pages don't say how your tenant classifies these. **Only your environment's data policy can answer whether HTTP, Office 365 Outlook, and SharePoint may be used together.** A maker sees a "blocked by policy" error when saving a flow that breaks it. The portal also shows whether HTTP needs Premium, which Microsoft's pages could not confirm here.
+
+## Turning it off
+
+- **App:** set Railway's `EMAIL_DELIVERY` to `disabled`. The routes answer 404, and saved actions and in-app notifications carry on.
+- **Flow:** turn it off. Messages wait; Admins are alerted after 30 minutes, and unsent ones expire after 48 hours.
 
 ## When something breaks
 
-| Admin sees (Users → Email delivery) | Likely cause | Fix |
+| Under Users → Email delivery | Likely cause | Fix |
 | --- | --- | --- |
-| `Outlook 401` or `Outlook 403` | Expired Outlook connection, or no mailbox access | A flow owner updates the connection, then choose Retry |
-| `token invalid_client` | The app secret expired or changed | New secret in Entra, then update `EMAIL_FLOW_CLIENT_SECRET` |
-| `HTTP 401` or `HTTP 403` | The allowed caller on the trigger is wrong | Check the service principal's object ID |
-| `HTTP 404` | The flow is off, or was deleted | Turn it on, or recreate it |
-| `flow accepted, no result` | Response actions are missing | Fix the flow |
-| `in doubt` | A timeout: it may have gone | Check the mailbox's Sent Items, then **Send again** only if needed |
-| `Outlook 429` or `HTTP 429` | Throttled: 300 sends a minute per connection, plus Exchange's own limits | Waits by itself |
+| Flow last collected long ago | Flow off, or Collect failing | Turn it on; check its run history |
+| `Outlook 401` or `Outlook 403` | Expired connection, or no mailbox access | A flow owner updates the connection; retries resume |
+| `ledger unavailable` | SharePoint connection or list | A flow owner fixes it; retries resume |
+| `rejected recipient` | Address outside the flow's domains | Check the domain list in the flow and in `EMAIL_ALLOWED_DOMAINS` |
+| `in doubt` | See above | Check Sent Items, then decide |
+| `Outlook 429` | Throttled | Waits by itself |
