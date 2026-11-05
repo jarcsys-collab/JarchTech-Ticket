@@ -53,7 +53,7 @@
     renderPanel();
   }
   function renderPanel() {
-    $('#inbox-label').innerHTML = `<strong>${esc(inboxLabel)}</strong><br>${simulated ? 'Simulated recipients for the shared beta test data: nothing is emailed or sent to the people named in sample records.' : `Notifications for your account, including due-date reminders and escalations. Email: ${window.JARC_SESSION.emailDelivery === 'enabled' ? 'available (turn it on under Settings)' : 'not enabled, so notifications are in-app only'}.`} Read and unread are tracked for you only.`;
+    $('#inbox-label').innerHTML = `<strong>${esc(inboxLabel)}</strong><br>${simulated ? 'Simulated recipients for the shared beta test data: nothing is emailed or sent to the people named in sample records.' : `Notifications for your account, including due-date reminders and escalations. Email: ${{ enabled: 'available (choose what you receive under Settings)', 'test-only': 'being tested with a few accounts' }[window.JARC_SESSION.emailDelivery] || 'not enabled, so notifications are in-app only'}.`} Read and unread are tracked for you only.`;
     $('#mark-all').disabled = !unreadCount;
     $('#notification-list').innerHTML = !items.length
       ? `<div class="empty">No notifications ${simulated ? `for the ${esc(role)} view ` : ''}yet. Assignments, comments, requests for information, meeting proposals, acceptance requests, and returned corrections will appear here.</div>`
@@ -99,6 +99,25 @@
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshUnread(); });
   setInterval(() => { if (document.visibilityState === 'visible') refreshUnread(); }, POLL_MS);
   refreshUnread();
+
+  // ---- Links from emails ----
+  // /?request=JRC-1 (and optionally &change=CR-1) only opens the request: a link never changes anything. The server decides
+  // again whether this account may see it, so a forwarded email gives nobody access.
+  function openRequestLink() {
+    const params = new URLSearchParams(location.search), id = params.get('request'), change = params.get('change');
+    if (!id) return;
+    history.replaceState(null, '', location.pathname); // a reload or a shared address from here on is just the app
+    if (simulated || !/^JRC-\d{1,9}$/.test(id) || (change && !/^CR-\d{1,9}$/.test(change))) return;
+    window.addEventListener('jarc-workspace-loaded', async () => {
+      const r = await B.ticket(id);
+      if (!r.ok) {
+        return open(`<div class="tagline">LINK FROM EMAIL</div><h2>This request cannot be opened</h2><p id="request-link-problem">${r.status === 404 ? `${esc(id)} is not available to your account. It may have been deleted, or your access may have changed. If you still need it, ask an Admin.` : esc(r.message)}</p>`);
+      }
+      mergeShared(r.data);
+      if (change && r.data.changes.some(c => c.id === change)) changeDetail(change); else detail(id);
+    }, { once: true });
+  }
+  openRequestLink();
 
   // ---- Attachments ----
   // Adds a file picker to a form. Files upload as soon as they are chosen, with progress and per-file errors.

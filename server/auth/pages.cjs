@@ -23,7 +23,8 @@ body.auth-page main.auth-card{margin:0;max-width:none;background:#fff;border-rad
 <h1>${esc(heading)}</h1><p>${esc(message)}</p>${action ? `<div class="actions">${action}</div>` : ''}${note ? `<p class="auth-note">${esc(note)}</p>` : ''}</main></body></html>`;
 }
 
-const signInButton = (label = 'Sign in with Microsoft') => `<a class="primary" href="/auth/login">${esc(label)}</a>`;
+// returnTo: an already validated request link (return-path.cjs), carried through sign-in so the person lands on it.
+const signInButton = (label = 'Sign in with Microsoft', returnTo = null) => `<a class="primary" href="/auth/login${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ''}">${esc(label)}</a>`;
 
 const DENIED = {
   'not-invited': 'Your Microsoft account signed in successfully, but it has not been given access to JarcTech Ticket. Ask a JarcTech Ticket administrator to invite you.',
@@ -41,13 +42,13 @@ const SIGN_IN_MESSAGE = {
 };
 
 const pages = {
-  signIn: (accessPolicy = 'invite-only') => page({ title: 'Sign in', heading: 'Sign in to JarcTech Ticket', message: SIGN_IN_MESSAGE[accessPolicy] || SIGN_IN_MESSAGE['invite-only'], action: signInButton() }),
-  denied: reason => page({ title: 'Access not granted', heading: 'Access not granted', message: DENIED[reason] || DENIED['not-invited'], action: signInButton('Sign in with a different account'), note: 'No ticket data was opened.' }),
+  signIn: (accessPolicy = 'invite-only', returnTo = null) => page({ title: 'Sign in', heading: 'Sign in to JarcTech Ticket', message: SIGN_IN_MESSAGE[accessPolicy] || SIGN_IN_MESSAGE['invite-only'], action: signInButton(undefined, returnTo), note: returnTo ? 'After you sign in, the request from your email opens. You can only see it if your account has access.' : '' }),
+  denied: (reason, returnTo = null) => page({ title: 'Access not granted', heading: 'Access not granted', message: DENIED[reason] || DENIED['not-invited'], action: signInButton('Sign in with a different account', returnTo), note: 'No ticket data was opened.' }),
   signedOut: () => page({ title: 'Signed out', heading: 'You have signed out', message: 'Your JarcTech Ticket session has ended.', action: signInButton('Sign in again') }),
-  failed: message => page({ title: 'Sign-in failed', heading: 'Sign-in could not be completed', message, action: signInButton('Try again') }),
+  failed: (message, returnTo = null) => page({ title: 'Sign-in failed', heading: 'Sign-in could not be completed', message, action: signInButton('Try again', returnTo) }),
   notSetUp: () => page({ title: 'Sign-in not set up', heading: 'Sign-in is not set up yet', message: 'The JarcTech Ticket database has not been prepared for sign-in. An administrator needs to complete the one-time setup.' }),
-  tooMany: () => page({ title: 'Too many attempts', heading: 'Too many sign-in attempts', message: 'Too many sign-in attempts came from this address. Wait a minute, then try again.', action: signInButton('Try again') }),
-  unavailable: () => page({ title: 'Sign-in unavailable', heading: 'Sign-in is temporarily unavailable', message: 'JarcTech Ticket could not reach Microsoft sign-in. Please try again in a few minutes.', action: signInButton('Try again') })
+  tooMany: (returnTo = null) => page({ title: 'Too many attempts', heading: 'Too many sign-in attempts', message: 'Too many sign-in attempts came from this address. Wait a minute, then try again.', action: signInButton('Try again', returnTo) }),
+  unavailable: (returnTo = null) => page({ title: 'Sign-in unavailable', heading: 'Sign-in is temporarily unavailable', message: 'JarcTech Ticket could not reach Microsoft sign-in. Please try again in a few minutes.', action: signInButton('Try again', returnTo) })
 };
 
 module.exports = { pages };

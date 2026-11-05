@@ -27,7 +27,9 @@ The database keeps its historic name. "staging" in the name has no effect, and r
 | `BETA_SIMULATION`, `INSPECTION_MODE` | `disabled` | **The server refuses to start with either enabled when deployed**, or with an `APP_BASE_URL` that is not localhost |
 | `ENTRA_*`, `SESSION_SECRET`, `MONGODB_URI`, `MONGODB_DB_NAME`, `APP_BASE_URL`, `NODE_ENV` | unchanged | Secrets are kept in Railway only |
 | `ATTACHMENT_QUOTA_MB` | not set (200) | Optional. Total attachment storage |
-| `EMAIL_DELIVERY` | not set (off) | Optional. Reminder email through Resend; needs `EMAIL_FROM` and `RESEND_API_KEY` |
+| `EMAIL_DELIVERY` | not set (off) | Email through Resend; needs `EMAIL_FROM` and `RESEND_API_KEY`. See [EMAIL-SETUP.md](EMAIL-SETUP.md) |
+| `EMAIL_TEST_RECIPIENTS` | not set | Limits all delivery to these addresses during testing |
+| `EMAIL_REPLY_TO` | not set | Reply address for automatic reminders |
 
 Teams and calendar integrations do not exist. A meeting's location is plain text, and the screens say that no invitation is sent.
 
@@ -95,6 +97,7 @@ The `release.official` audit event is only a marker. Earlier versions ignore it.
 - **Headers:** CSP with no inline script except the nonce-marked session, frame denial, nosniff, HSTS.
 - **Rate limits** (one instance, in memory, reset on restart): 180 changes and 1,200 reads a minute per account; 60 uploads per 10 minutes per account; 60 sign-in attempts a minute per address. Exceeding one answers 429 and changes nothing.
 - **Attachments:** PNG, JPEG, GIF, WebP, PDF, TXT, LOG, CSV, DOCX, XLSX, PPTX; 10 MB each; 5 per submission; 20 unsubmitted per person; 200 MB in total. Content is checked against the type; files always download, never open in the app. Unsubmitted uploads are removed after 24 hours by the scheduler.
+- **Email:** off unless `EMAIL_DELIVERY=resend`. Messages go straight away, and the scheduler picks up anything left. Temporary failures retry up to 5 times with growing delays, a daily quota waits for its reset, and permanent refusals stop. Messages waiting over 48 hours expire. The reminder scheduler is what picks up retries, so keep `REMINDERS` on while email is on. Status and retry are under **Users → Email delivery**. Logs hold the request ID and the provider's error code, never addresses, keys, or message content.
 - **Reminders:** every 5 minutes, one instance at a time through a database lease. Each run reads current state, so a restart or missed run catches up, and unique keys prevent duplicates.
 
 ## Finding interrupted work
@@ -107,12 +110,13 @@ A deletion that stopped part-way leaves a request with a `deleting` field: it is
 2. **Storage plan unconfirmed.** The Atlas plan could not be read from here. If it is the free M0 tier, its 512 MB is shared by data, indexes, and files (real 200 MB limit, plus up to 200 MB of beta files allowed, of which about 2 MB is used), and it has connection and throughput limits unsuited to heavy use. The Users screen shows storage in use. Review before relying on attachments at volume.
 3. **Attachments are not scanned for malware.** Types and content are checked, and they download rather than open, but a harmful document can still be uploaded. People should treat them as they would email attachments. CSV files can contain spreadsheet formulas.
 4. **A scope change and its request are two saves, made recoverable rather than transactional.** An approved, released, or closed change is saved with a `pendingEffect` describing what it does to the request, and the request records the effect's key in the same write that applies it, so it applies exactly once. If the process stops in between, the effect is finished before the next action on that request or its changes, and within one scheduler run (5 minutes, also after a restart) otherwise. It cannot be used to bypass approval, the agreement lock, confirmations, or closure. Until then the request may briefly *show* its earlier agreement. To inspect: find `ticket_changes` documents with a `pendingEffect`; the log says "finished N interrupted scope change update(s)". A new change that stops before its note reaches the request has no rule attached: it appears on the request and holds up closure until an Admin rejects it. In-app notifications are sent after a save, and one lost in a crash is not resent.
-5. **Rate limits are per instance and in memory.** They stop runaway clients and casual abuse, not a determined attacker. Adding a second instance needs a shared store, and would also multiply the limits.
-6. **Scale.** The dashboard loads every record the person may see. This suits the current size (hundreds of requests), but thousands would need paging there too.
-7. **Sign-in identity.** Roles bind to the Entra object ID, but the first sign-in links an invitation or a conflict check by email address. This relies on the tenant administrators controlling those addresses.
-8. **Database network access.** See the checklist below; a list open to all addresses means the password is the only barrier.
-9. **The audit log records account changes and request activity, but is not tamper-proof:** anyone with database access could alter it.
-10. **The repository is public.** No secrets or account data are stored in it (history checked at release), but the code and its workflow are visible.
+5. **An email can be lost in a crash.** Messages are queued just after the save, as in-app notifications are, so a process that stops between the two loses that message; the action itself stands. Once queued, a message survives restarts, and the provider's 24-hour idempotency key stops a retry arriving twice. Queued messages hold the request ID, title, and the names involved, and backups include them.
+6. **Rate limits are per instance and in memory.** They stop runaway clients and casual abuse, not a determined attacker. Adding a second instance needs a shared store, and would also multiply the limits.
+7. **Scale.** The dashboard loads every record the person may see. This suits the current size (hundreds of requests), but thousands would need paging there too.
+8. **Sign-in identity.** Roles bind to the Entra object ID, but the first sign-in links an invitation or a conflict check by email address. This relies on the tenant administrators controlling those addresses.
+9. **Database network access.** See the checklist below; a list open to all addresses means the password is the only barrier.
+10. **The audit log records account changes and request activity, but is not tamper-proof:** anyone with database access could alter it.
+11. **The repository is public.** No secrets or account data are stored in it (history checked at release), but the code and its workflow are visible.
 
 ## External setup to review
 
@@ -123,6 +127,7 @@ These need portal access that this work did not have.
 - [ ] **Atlas database user:** the app has `readWrite` on this database only, which is good. Consider rotating the password (it is also in the owner's ignored local `.env.staging`), and update Railway when you do.
 - [ ] **Entra:** note the client secret's expiry date. Sign-in stops working when it expires.
 - [ ] **Railway after 2026-12-01:** [Railway stops reading `railway.json`](https://docs.railway.com/infrastructure-as-code) then. The health check and restart policy are in the service settings, and `npm start` is the default, so deployment keeps working; delete the file, or move to `.railway/railway.ts` with `railway config migrate` if you want settings in code. Railway checks `/readyz` only during a deployment, not afterwards, so an outage later needs outside monitoring to be noticed.
+- [ ] **Email:** the steps in [EMAIL-SETUP.md](EMAIL-SETUP.md).
 - [ ] **GitHub:** `main` has no branch protection. Consider requiring the `check` job, since `main` deploys automatically.
 
 ## Admin onboarding

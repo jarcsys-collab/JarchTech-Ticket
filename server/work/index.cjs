@@ -10,13 +10,14 @@
 // Beta simulation views and sample people never apply here. The request handling is server/workspace/engine.cjs.
 const { ObjectId } = require('mongodb');
 const { WORK_COLLECTIONS } = require('../schema.cjs');
-const { sendJson } = require('../http.cjs');
+const { HttpError, sendJson } = require('../http.cjs');
 const { createWorkspace } = require('../workspace/engine.cjs');
 const { accounts } = require('../workspace/notifications.cjs');
 
 const WORKSPACE = 'main';
+const EMAIL_RETRY = /^\/api\/v1\/work\/email\/([0-9a-f]{24})\/retry$/;
 
-function createWork({ db, log = console, now = () => new Date(), recordEvent = async () => {}, settings, attachmentQuotaBytes }) {
+function createWork({ db, log = console, now = () => new Date(), recordEvent = async () => {}, settings, attachmentQuotaBytes, email = null }) {
   const users = db.collection('users');
   const uidOf = user => String(user._id);
   const nameOf = user => user.displayName || user.email;
@@ -102,13 +103,24 @@ function createWork({ db, log = console, now = () => new Date(), recordEvent = a
     },
     creationView: () => 'Requestor',
     extras: async user => ({ developers: await assignees(user), ...await accountFlags(user) }),
-    async routes(req, res, pathname, user) {
-      if (pathname !== '/api/v1/work/people' || !['GET', 'HEAD'].includes(req.method)) return false;
-      sendJson(req, res, 200, await policy.extras(user));
+    async routes(req, res, pathname, user, url) {
+      const read = ['GET', 'HEAD'].includes(req.method);
+      if (pathname === '/api/v1/work/people' && read) { sendJson(req, res, 200, await policy.extras(user)); return true; }
+      // Email delivery status, retry of a failed message, and a test message to yourself: Admins only.
+      const retry = EMAIL_RETRY.exec(pathname), test = pathname === '/api/v1/work/email/test';
+      if (!email || !((pathname === '/api/v1/work/email' && read) || ((retry || test) && req.method === 'POST'))) return false;
+      if (!admin(user)) throw new HttpError(403, 'admin-only');
+      if (read) sendJson(req, res, 200, await email.status(url.searchParams.get('status')));
+      else if (test) sendJson(req, res, 202, await email.sendTest(user));
+      else {
+        const result = await email.retry(retry[1]);
+        await recordEvent('email.retried', { actorId: user._id, message: retry[1] });
+        sendJson(req, res, 202, result);
+      }
       return true;
     }
   };
-  return createWorkspace({ db, policy, log, now, recordEvent, settings, attachmentQuotaBytes });
+  return createWorkspace({ db, policy, log, now, recordEvent, settings, attachmentQuotaBytes, email });
 }
 
 module.exports = { WORKSPACE, createWork };

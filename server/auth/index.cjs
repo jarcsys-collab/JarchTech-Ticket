@@ -10,21 +10,26 @@ const { ABSOLUTE_MS, StoreError, createStore } = require('./store.cjs');
 const { seal, unseal } = require('./tokens.cjs');
 const { createBeta } = require('../beta/index.cjs');
 const { createWork } = require('../work/index.cjs');
+const { createEmail } = require('../workspace/email.cjs');
+const { safeReturnPath } = require('./return-path.cjs');
 
 const FLOW_MS = 10 * 60 * 1000;
 const FLOW_PURPOSE = 'jarctech-auth-flow';
 const PUBLIC_ASSETS = new Set(['/style.css']); // used by the sign-in pages before anyone is signed in
 const USER_PATH = /^\/api\/v1\/users\/([0-9a-f]{24})$/;
 
-// settings: due-date settings (config.reminders); email: config.email (only whether it is enabled is used here).
-function createAuth(auth, { database, log = console, oidc: oidcOptions, now, settings, email = { enabled: false }, limits: limitSettings = {}, deployed = false } = {}) {
+// settings: due-date settings (config.reminders); email: config.email. emailFetch and emailInstant are for the server's
+// start-up: a test stand-in for the provider, and whether a queued message is sent straight away or on the next run.
+function createAuth(auth, { database, log = console, oidc: oidcOptions, now, settings, email = { enabled: false }, emailFetch, emailInstant = false, limits: limitSettings = {}, deployed = false } = {}) {
   const store = createStore(database.db(), { now });
   const limits = createLimits({ enabled: limitSettings.rate === true });
   const attachmentQuotaBytes = limitSettings.attachmentQuotaBytes;
   const limited = (req, res, hit) => { sendJson(req, res, 429, { error: 'rate-limited', message: hit.message }, { 'Retry-After': String(hit.retryAfter), ...(req.complete ? {} : { Connection: 'close' }) }); return true; };
   const recordEvent = (type, details) => store.record(type, details);
+  // Email is for My workspace only. It checks access with the same rule as the app, just before each message goes.
+  const mailer = createEmail({ config: email, db: database.db(), fetch: emailFetch, now: now || (() => new Date()), log, settings, canSee: (user, t) => work.policy.canSee(user, t), instant: emailInstant });
   // My workspace: real tickets with access from the signed-in account's role and ownership.
-  const work = createWork({ db: database.db(), log, now: now || (() => new Date()), recordEvent, settings, attachmentQuotaBytes });
+  const work = createWork({ db: database.db(), log, now: now || (() => new Date()), recordEvent, settings, attachmentQuotaBytes, email: mailer });
   // Shared beta simulation workspace, only when BETA_SIMULATION=enabled. Reset events go to the audit log.
   const beta = auth.beta ? createBeta({ db: database.db(), log, now: now || (() => new Date()), recordEvent, settings, attachmentQuotaBytes }) : null;
   const oidc = createOidc(auth, oidcOptions);
@@ -52,15 +57,20 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
     return false;
   }
 
+  // A request link from an email, if this address carries one. Anything else is ignored, not followed.
+  const returnFrom = req => safeReturnPath(new URL(req.url, auth.baseUrl).searchParams.get('returnTo'));
+
   async function login(req, res) {
     if (!await requireSchema(req, res)) return;
+    const returnTo = returnFrom(req);
     try {
       const { url, flow } = await oidc.begin();
-      const value = seal({ ...flow, exp: Date.now() + FLOW_MS }, auth.sessionSecret, FLOW_PURPOSE);
+      // The return address travels inside the sealed sign-in cookie with state, nonce, and the PKCE verifier.
+      const value = seal({ ...flow, returnTo, exp: Date.now() + FLOW_MS }, auth.sessionSecret, FLOW_PURPOSE);
       return redirect(res, url, 302, { 'Set-Cookie': cookie(FLOW, value, { secure, maxAge: FLOW_MS / 1000 }) });
     } catch (err) {
       log.error(`Sign-in unavailable: ${describe(err)}`);
-      return sendHtml(req, res, 503, pages.unavailable());
+      return sendHtml(req, res, 503, pages.unavailable(returnTo));
     }
   }
 
@@ -68,30 +78,31 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
     if (!await requireSchema(req, res)) return;
     const clearFlow = { 'Set-Cookie': clear(FLOW) };
     const url = new URL(req.url, auth.baseUrl);
+    const flow = unseal(parseCookies(req)[FLOW], auth.sessionSecret, FLOW_PURPOSE);
+    const returnTo = flow && safeReturnPath(flow.returnTo);
     const error = url.searchParams.get('error');
     if (error) {
       const code = error.replace(/[^a-z_]/gi, '').slice(0, 60);
       log.error(`Microsoft sign-in returned an error: ${code}`);
-      return sendHtml(req, res, 400, pages.failed(`Microsoft sign-in did not complete (${code}). Please try again.`), clearFlow);
+      return sendHtml(req, res, 400, pages.failed(`Microsoft sign-in did not complete (${code}). Please try again.`, returnTo), clearFlow);
     }
-    const flow = unseal(parseCookies(req)[FLOW], auth.sessionSecret, FLOW_PURPOSE);
     if (!flow || !(flow.exp > Date.now())) {
-      return sendHtml(req, res, 400, pages.failed('The sign-in attempt expired or was started in another browser. Please try again.'), clearFlow);
+      return sendHtml(req, res, 400, pages.failed('The sign-in attempt expired or was started in another browser. Please try again.', returnTo), clearFlow);
     }
     let claims;
     try { claims = await oidc.finish(url, flow); }
     catch (err) {
       log.error(`Sign-in rejected: ${describe(err)}`);
-      return sendHtml(req, res, 401, pages.failed('The sign-in response could not be verified. Please try again.'), clearFlow);
+      return sendHtml(req, res, 401, pages.failed('The sign-in response could not be verified. Please try again.', returnTo), clearFlow);
     }
     const result = await store.admit(claims, auth.tenantId, { accessPolicy: auth.accessPolicy });
     if (result.denied) {
       log.log(`Sign-in denied (${result.denied}).`);
-      return sendHtml(req, res, 403, pages.denied(result.denied), clearFlow);
+      return sendHtml(req, res, 403, pages.denied(result.denied, returnTo), clearFlow);
     }
     await store.deleteSession(tokenOf(req)); // never keep using a session from before this sign-in
     const token = await store.createSession(result.user._id);
-    return redirect(res, '/', 302, { 'Set-Cookie': [clear(FLOW), cookie(SESSION, token, { secure, maxAge: ABSOLUTE_MS / 1000 })] });
+    return redirect(res, returnTo || '/', 302, { 'Set-Cookie': [clear(FLOW), cookie(SESSION, token, { secure, maxAge: ABSOLUTE_MS / 1000 })] });
   }
 
   async function logout(req, res) {
@@ -122,11 +133,13 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
     if (pathname === '/api/v1/me/preferences') {
       if (req.method === 'PATCH') {
         const body = await readJson(req);
-        if (!body || typeof body.emailReminders !== 'boolean') return sendJson(req, res, 400, { error: 'invalid-preferences' });
-        await store.setPreferences(user, { emailReminders: body.emailReminders });
-        user.emailReminders = body.emailReminders;
+        const changes = {};
+        for (const key of ['emailReminders', 'emailActions']) if (body && key in body) changes[key] = body[key];
+        if (!Object.keys(changes).length || !Object.values(changes).every(v => typeof v === 'boolean')) return sendJson(req, res, 400, { error: 'invalid-preferences' });
+        await store.setPreferences(user, changes);
+        Object.assign(user, changes);
       } else if (write) return sendJson(req, res, 405, { error: 'method-not-allowed' }, { Allow: 'GET, HEAD, PATCH' });
-      return sendJson(req, res, 200, { emailReminders: user.emailReminders === true, emailDelivery: email.enabled ? 'enabled' : 'disabled' });
+      return sendJson(req, res, 200, { emailReminders: user.emailReminders === true, emailActions: user.emailActions !== false, emailDelivery: mailer.mode });
     }
     const userMatch = USER_PATH.exec(pathname);
     if (pathname !== '/api/v1/users' && pathname !== '/api/v1/users/activity' && !userMatch) return sendJson(req, res, 404, { error: 'not-found' });
@@ -152,13 +165,14 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
     try {
       if (pathname === '/auth/login' || pathname === '/auth/callback') {
         const hit = limits.take('signin', clientAddress(req, { trustProxy: deployed }));
-        if (hit) { sendHtml(req, res, 429, pages.tooMany(), { 'Retry-After': String(hit.retryAfter) }); return true; }
+        if (hit) { sendHtml(req, res, 429, pages.tooMany(pathname === '/auth/login' ? returnFrom(req) : null), { 'Retry-After': String(hit.retryAfter) }); return true; }
       }
       if (pathname === '/auth/login' && req.method === 'GET') { await login(req, res); return true; }
       if (pathname === '/auth/callback' && req.method === 'GET') { await callback(req, res); return true; }
       if (pathname === '/auth/logout' && req.method === 'POST') { await logout(req, res); return true; }
       if (pathname === '/auth/signin' && req.method === 'GET') {
-        if (await currentUser(req)) redirect(res, '/'); else sendHtml(req, res, 200, pages.signIn(auth.accessPolicy));
+        const returnTo = returnFrom(req);
+        if (await currentUser(req)) redirect(res, returnTo || '/'); else sendHtml(req, res, 200, pages.signIn(auth.accessPolicy, returnTo));
         return true;
       }
       if (pathname === '/auth/signed-out' && req.method === 'GET') { sendHtml(req, res, 200, pages.signedOut()); return true; }
@@ -181,13 +195,15 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
     const user = await currentUser(req);
     // Sample data and the preview exist only in local and test configurations; the official deployment does not serve them.
     if (user && ((pathname === '/inspection.js' && !auth.inspection) || (pathname === '/sample-data.js' && !auth.inspection))) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); res.end('Not found'); return null; }
-    if (user) return { user, page: { accessPolicy: auth.accessPolicy, inspection: auth.inspection === true, beta: auth.beta === true, deadlines: { timezone: (settings && settings.timezone) || 'Asia/Manila', dueSoonDays: settings ? settings.dueSoonDays : 2 }, email: email.enabled === true } };
-    if (pathname === '/' || pathname.endsWith('.html')) redirect(res, '/auth/signin');
+    if (user) return { user, page: { accessPolicy: auth.accessPolicy, inspection: auth.inspection === true, beta: auth.beta === true, deadlines: { timezone: (settings && settings.timezone) || 'Asia/Manila', dueSoonDays: settings ? settings.dueSoonDays : 2 }, email: mailer.mode === 'disabled' ? false : mailer.mode } };
+    // A signed-out person following a request link comes back to that request after signing in.
+    const back = pathname === '/' ? safeReturnPath(req.url) : null;
+    if (pathname === '/' || pathname.endsWith('.html')) redirect(res, back ? `/auth/signin?returnTo=${encodeURIComponent(back)}` : '/auth/signin');
     else { res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); res.end('Sign in required'); }
     return null;
   }
 
-  return { handle, gate, store, cookieName: SESSION, beta: Boolean(beta), engines: { work, beta }, secure, formOrigins: [oidc.origin] };
+  return { handle, gate, store, mailer, cookieName: SESSION, beta: Boolean(beta), engines: { work, beta }, secure, formOrigins: [oidc.origin] };
 }
 
 // Adds the signed-in user's display details to index.html. Values are JSON with < escaped, so they cannot end the script.
@@ -198,7 +214,7 @@ function createAuth(auth, { database, log = console, oidc: oidcOptions, now, set
 // In the official configuration (no beta simulation, no inspection) the page has no role selector, no sample data, and
 // none of the browser-only prototype's labels. nonce: allows the one inline script below under the page's CSP.
 function injectSession(html, user, { accessPolicy = 'invite-only', inspection = false, beta = false, deadlines = { timezone: 'Asia/Manila', dueSoonDays: 2 }, email = false, nonce = '' } = {}) {
-  const data = JSON.stringify({ id: String(user._id), displayName: user.displayName || user.email, email: user.email, role: user.role, accessPolicy, inspection, beta, deadlines, emailDelivery: email ? 'enabled' : 'disabled' }).replace(/</g, '\\u003c');
+  const data = JSON.stringify({ id: String(user._id), displayName: user.displayName || user.email, email: user.email, role: user.role, accessPolicy, inspection, beta, deadlines, emailDelivery: email === true ? 'enabled' : email || 'disabled' }).replace(/</g, '\\u003c');
   const before = `<script${nonce ? ` nonce="${nonce}"` : ''}>window.JARC_SESSION=Object.freeze(${data});</script>${inspection ? '<script src="inspection.js"></script>' : ''}<script src="workspace-store.js"></script>`;
   const page = html
     .replace('<span class="live-dot"></span> Local prototype<small>Changes saved in this browser</small>', '<span class="live-dot"></span> My workspace<small>Saved on the server · access from your account</small>')

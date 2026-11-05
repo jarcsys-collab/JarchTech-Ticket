@@ -15,10 +15,10 @@ const SHUTDOWN_GRACE_MS = 8000;
 // clock, whether the reminder timer starts, and a stand-in for the email provider's HTTP API).
 async function start(config, { log = console, oidc, now, scheduler = true, emailFetch } = {}) {
   const database = createDatabase(config.database);
-  const auth = config.auth.mode === 'entra' ? createAuth(config.auth, { database, log, oidc, now, settings: config.reminders, email: config.email, limits: config.limits, deployed: config.deployed }) : null;
+  const auth = config.auth.mode === 'entra' ? createAuth(config.auth, { database, log, oidc, now, settings: config.reminders, email: config.email, emailFetch, emailInstant: scheduler, limits: config.limits, deployed: config.deployed }) : null;
   // Reminders run on the server with sign-in (they need My workspace); email is optional and off by default.
   const clock = now || (() => new Date());
-  const email = auth ? createEmail({ config: config.email, db: database.db(), fetch: emailFetch, now: clock, log }) : null;
+  const email = auth ? auth.mailer : null;
   const reminders = auth ? createReminders({ db: database.db(), workspaces: Object.values(auth.engines).filter(Boolean), settings: config.reminders, email, now: clock, log }) : null;
   let shuttingDown = false;
   const server = createServer({ database, auth, isShuttingDown: () => shuttingDown, log });
@@ -37,7 +37,7 @@ async function start(config, { log = console, oidc, now, scheduler = true, email
   if (reminders && config.reminders.enabled && scheduler) reminders.start();
   if (auth) {
     log.log(config.reminders.enabled ? `Reminders: on (every ${config.reminders.intervalMinutes} min, ${config.reminders.timezone}).` : 'Reminders: off (REMINDERS=disabled).');
-    log.log(config.email.enabled ? 'Email: enabled via Resend, only for people who turn on email reminders.' : 'Email: disabled. Notifications are in-app only.');
+    log.log({ enabled: 'Email: enabled via Resend. Actions email the people involved; reminders only those who opted in.', 'test-only': 'Email: enabled via Resend for the test recipients only (EMAIL_TEST_RECIPIENTS).', disabled: 'Email: disabled. Notifications are in-app only.' }[email.mode]);
   }
   log.log(!auth
     ? 'Sign-in: none. Browser-only demo mode for local use; records stay in this browser.'
@@ -66,6 +66,7 @@ async function start(config, { log = console, oidc, now, scheduler = true, email
         setTimeout(() => server.closeAllConnections(), SHUTDOWN_GRACE_MS).unref();
       });
       if (reminders) await reminders.stop();
+      if (email) await email.stop();
       await database.close();
       log.log('Shutdown complete.');
     })();

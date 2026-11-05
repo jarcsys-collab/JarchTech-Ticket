@@ -195,14 +195,31 @@ Presentation and navigation only; the workflow, permissions, and data are unchan
   - **Turning it off:** set `REMINDERS=disabled`.
 - **Simulation:** reminders for beta simulation records go only to the simulated inboxes and are never emailed.
 
-### Optional email (off by default)
+### Email (off until set up)
 
-Email uses [Resend](https://resend.com)'s HTTPS API. It needs no Microsoft Entra, Graph, tenant, or consent changes, and no package.
-- **How to turn it on:** set `EMAIL_DELIVERY=resend`, `EMAIL_FROM`, and `RESEND_API_KEY` (Railway variables; never commit them). The server logs `Email: enabled` or `Email: disabled` at start-up, and **Settings** tells each person whether it's on.
-- **Who gets it:** only people who tick **Email me reminders** in **Settings**. It's off for everyone by default, and it's checked again before each send.
-- **What's sent:** reminders and escalations only. Each message has the ticket number, the kind of reminder, and a sign-in link: no summaries, descriptions, comments, or names.
-- **Delivery:** messages queue in `email_outbox` and retry with backoff. A provider failure never affects in-app notifications.
-- **Without it:** in-app reminders work fully with email disabled.
+Email uses [Resend](https://resend.com)'s HTTPS API. It needs no Microsoft Entra, Graph, tenant, or consent changes, and no package. People read it in Outlook, follow the link, and act in the app.
+- **How to turn it on:** [docs/EMAIL-SETUP.md](docs/EMAIL-SETUP.md), test recipients first. The server logs which state it is in at start-up, and **Settings** tells each person.
+- **What's sent, and to whom** (one message per person, never a shared list, and never about your own action):
+
+  | Event | Recipient |
+  | --- | --- |
+  | Assignment or reassignment | The new worker |
+  | Meeting proposed or changed | The Requestor |
+  | Meeting confirmed | The worker |
+  | Agreement ready to confirm | The Requestor when it is recorded; the worker if the Requestor confirms first |
+  | Worker's completion ready for review | The Requestor |
+  | Returned for correction | The worker |
+  | Both confirmations in, and the request can be closed (a Project also needs its handover) | Active Admins |
+  | Closure | The Requestor and the worker |
+  | Reminders and escalations | As in the app, for people who opted in |
+
+  If the Requestor's account is disabled, or a Developer is both Requestor and worker, the Requestor's emails go to Admins other than the worker, because they review instead.
+- **Choices:** in **Settings**. Emails about your actions are on unless you turn them off; reminders stay off unless you turn them on.
+- **What's in a message:** the request ID and title, who acted, the next step, the meeting time or delivery date, and one button. No descriptions, comments, reasons, evidence, or files. Meeting emails are notifications, not calendar invitations.
+- **Sender:** always "JarcTech Ticket" at `EMAIL_FROM`. Replies go to the person who acted (`EMAIL_REPLY_TO` for automatic reminders) and do not become comments.
+- **Links** only open the request. Someone signed out signs in with Microsoft and returns to it. The server checks access every time, so forwarding an email gives nobody access, and approvals only ever happen by a button in the app.
+- **Delivery:** messages queue in `email_outbox`, go out straight away, and retry with backoff. Each is rechecked just before sending, and suppressed if the account, its choice, its access, or the step has changed. Admins see the status under **Users → Email delivery**, with **Retry** for failures. "Accepted by provider" does not prove it reached the inbox.
+- **Without it:** saving and in-app notifications never depend on email. Nothing is queued while it's off, so turning it on sends no backlog.
 
 ### Local configuration (development app registration)
 
@@ -284,7 +301,7 @@ Don't set `PORT` or `HOST` in Railway; Railway provides `PORT`. Don't copy the l
 
 **Order matters:** `/readyz` stays not-ready until `npm run db:setup` has prepared the staging database, so run the approved `db:setup` for that database **before** the first deploy. Otherwise the health check fails and Railway keeps the deploy from going live. The Entra registration also needs the matching Web callback, `https://<railway-domain>/auth/callback`.
 
-**Optional variables** (defaults in brackets): `WORKSPACE_TIMEZONE` [Asia/Manila], `REMINDERS` [enabled], `REMINDER_INTERVAL_MINUTES` [5], `REMINDER_DUE_SOON_DAYS` [2], `REMINDER_ESCALATE_OVERDUE_DAYS` [2], `REMINDER_ACCEPTANCE_DAYS` [2], `REMINDER_ESCALATE_ACCEPTANCE_DAYS` [5], `REMINDER_PENDING_DAYS` [2], `EMAIL_DELIVERY` [disabled] with `EMAIL_FROM` and `RESEND_API_KEY` when it is `resend`.
+**Optional variables** (defaults in brackets): `WORKSPACE_TIMEZONE` [Asia/Manila], `REMINDERS` [enabled], `REMINDER_INTERVAL_MINUTES` [5], `REMINDER_DUE_SOON_DAYS` [2], `REMINDER_ESCALATE_OVERDUE_DAYS` [2], `REMINDER_ACCEPTANCE_DAYS` [2], `REMINDER_ESCALATE_ACCEPTANCE_DAYS` [5], `REMINDER_PENDING_DAYS` [2], `EMAIL_DELIVERY` [disabled] with `EMAIL_FROM` and `RESEND_API_KEY` when it is `resend`, and optionally `EMAIL_REPLY_TO` and `EMAIL_TEST_RECIPIENTS`.
 
 ## Checks
 
@@ -468,7 +485,10 @@ Browser scripts are classic scripts that share top-level names, so `index.html` 
 | `server/workspace/attachments.cjs`, `public/attachment-rules.js` | Attachments: GridFS storage per workspace, content checks, safe downloads that follow ticket access, abandoned-upload cleanup; shared limits and safe names |
 | `server/workspace/notifications.cjs` | In-app notifications and reminders: account inboxes (My workspace) or simulated inboxes (beta), per-member read state, duplicate prevention |
 | `public/deadline-core.js`, `server/workspace/reminders.cjs` | Requested and agreed dates, due-soon/overdue/awaiting rules (Asia/Manila calendar days); the leased reminder scheduler |
-| `server/workspace/email.cjs` | Optional reminder email through Resend (`EMAIL_DELIVERY=resend`), opt-in per person, with an outbox and retries |
+| `server/workspace/email.cjs` | Email through Resend (`EMAIL_DELIVERY=resend`): the outbox, sending, retries, and the Admin status |
+| `server/workspace/email-events.cjs` | Which action emails whom, and whether a queued message is still needed |
+| `server/workspace/email-templates.cjs` | Email wording and layout, HTML and plain text |
+| `server/auth/return-path.cjs` | The only addresses sign-in may return to |
 | `public/list-filter.js`, `public/list-view.js` | Ticket and project list search and filters (shared rules), result count, pages, and empty, loading, and error states |
 | `public/workspace-features.js`, `public/features.css` | Notifications panel and badge, attachment uploader, deadline labels, and the attention summary (signed-in mode) |
 | `scripts/work-walkthrough.mjs` | Real-browser walkthrough of My workspace roles, ownership, assignment, dates, reminders, role changes, and simulation separation (`npm run walkthrough:work`) |

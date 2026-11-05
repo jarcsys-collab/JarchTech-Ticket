@@ -111,8 +111,9 @@ function loadReminders(env, problems) {
   return out;
 }
 
-// EMAIL_DELIVERY=resend sends reminder and escalation emails through Resend's HTTPS API (no Microsoft Entra or
-// Graph permissions involved). Only people who turned email reminders on receive them.
+// EMAIL_DELIVERY=resend sends email through Resend's HTTPS API (no Microsoft Entra or Graph permissions involved).
+// The sender is always named JarcTech Ticket, at the address in EMAIL_FROM. Optional: EMAIL_REPLY_TO, the reply address for
+// automatic reminders; EMAIL_TEST_RECIPIENTS, a comma-separated list that limits all delivery to those accounts.
 function loadEmail(env, problems) {
   const value = name => (env[name] || '').trim();
   const provider = value('EMAIL_DELIVERY') || 'disabled';
@@ -127,8 +128,12 @@ function loadEmail(env, problems) {
   if (!key) problems.push('RESEND_API_KEY is required when EMAIL_DELIVERY=resend.');
   else if (PLACEHOLDER.test(key)) problems.push('RESEND_API_KEY still contains a placeholder. Enter the real value in .env or Railway variables.');
   if (!(value('APP_BASE_URL'))) problems.push('APP_BASE_URL is required when EMAIL_DELIVERY is enabled, for the sign-in link in emails.');
+  const replyTo = value('EMAIL_REPLY_TO');
+  if (replyTo && !EMAIL_ADDRESS.test(replyTo)) problems.push('EMAIL_REPLY_TO must be a plain email address.');
+  const testRecipients = value('EMAIL_TEST_RECIPIENTS').split(',').map(a => a.trim().toLowerCase()).filter(Boolean);
+  if (testRecipients.some(a => !EMAIL_ADDRESS.test(a))) problems.push('EMAIL_TEST_RECIPIENTS must be email addresses separated by commas.');
   if (problems.length > before) return { enabled: false, provider };
-  return { enabled: true, provider, from, apiKey: key, appUrl: value('APP_BASE_URL').replace(/\/$/, '') };
+  return { enabled: true, provider, from: `JarcTech Ticket <${address}>`, apiKey: key, appUrl: value('APP_BASE_URL').replace(/\/$/, ''), replyTo: replyTo || null, testRecipients };
 }
 
 function readDatabase(env, { required, problems }) {
